@@ -1,0 +1,30 @@
+# Playbook: 02-clone-repos.yml
+# Purpose: Clone repositories to target host
+# Run with: ansible-playbook -i inventory.ini playbooks/02-clone-repos.yml
+# ⚠️ Edit clone_repos list below with your repository URLs
+
+---
+- name: Clone repositories
+  hosts: production
+  become: false
+  vars:
+    # Add repositories here: { repo: "git@github.com:org/repo.git", dest: "~/repo-name" }
+    clone_repos:
+      - { repo: "https://github.com/YOUR_ORG/docker-verusd.git", dest: "/home/{{ ansible_user }}/{{ clone_destinations.docker_verusd }}" }
+
+  tasks:
+    - name: Clone repository
+      ansible.builtin.git:
+        repo: "{{ item.repo }}"
+        dest: "{{ item.dest }}"
+        clone: true
+        update: true
+        accept_hostkey: true
+      loop: "{{ clone_repos }}"
+      register: clone_result
+
+    - name: Display clone status
+      ansible.builtin.debug:
+        msg: "Cloned {{ item.item.repo }} to {{ item.item.dest }}"
+      loop: "{{ clone_result.results }}"
+      when: item.changed

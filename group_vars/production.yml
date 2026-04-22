@@ -1,0 +1,35 @@
+# ⚠️ EDIT THESE VALUES FOR YOUR DEPLOYMENT
+# All secrets and target-specific values are centralized here
+
+---
+# Production group variables
+env: production
+ansible_become: true
+ansible_become_method: sudo
+
+# Target host IP
+target_host: YOUR_TARGET_IP
+
+# SSH connection
+ansible_user: YOUR_SSH_USER
+ansible_ssh_private_key_file: ~/.ssh/YOUR_SSH_KEY
+ansible_ssh_common_args: -o StrictHostKeyChecking=no
+ansible_python_interpreter: /usr/bin/python3
+
+# Users to add to the docker group
+docker_users:
+  - YOUR_SSH_USER
+
+# Repository clone destinations (relative to ansible_user home)
+clone_destinations:
+  docker_verusd: docker-verusd
+
+# Docker network definitions
+# Each network gets its own subnet with readable bridge name
+# IP convention per service: .11=verusd, .12=RPC, .13=explorer, .14=ID verify
+# Subnet: use any private range (e.g. 10.x.x.x/24, 192.168.x.x/24)
+# Bridge name: br-SP + last 9 digits of subnet without dots
+verus_networks:
+  - name: net-vrsc-blue
+    subnet: 10.201.0.0/24
+    bridge_suffix: SP1020101

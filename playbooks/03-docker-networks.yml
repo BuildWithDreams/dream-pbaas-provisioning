@@ -1,0 +1,72 @@
+# Playbook: 03-docker-networks.yml
+# Purpose: Create Docker bridge networks for Verus chains
+# Run with: ansible-playbook -i inventory.ini playbooks/03-docker-networks.yml
+# ⚠️ Networks are defined in group_vars/production.yml under verus_networks
+---
+- name: Create Verus Docker networks
+  hosts: production
+  become: true
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd/infrastructure"
+
+  tasks:
+    - name: Load network definitions
+      ansible.builtin.set_fact:
+        networks: "{{ verus_networks }}"
+
+    - name: Ensure infrastructure directory exists
+      ansible.builtin.file:
+        path: "{{ docker_verusd_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Generate .env file for each network
+      ansible.builtin.copy:
+        content: |
+          DOCKER_NETWORK_SUBNET={{ item.subnet }}
+          BRIDGE_CUSTOM_NAME={{ item.bridge_suffix }}
+          DOCKER_NETWORK_NAME={{ item.name }}
+        dest: "{{ docker_verusd_path }}/.env.{{ item.name }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      loop: "{{ networks }}"
+      register: env_files
+
+    - name: Make infrastructure scripts executable
+      ansible.builtin.file:
+        path: "{{ docker_verusd_path }}/{{ item }}"
+        mode: '0755'
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+      loop:
+        - init_network.sh
+        - teardown_network.sh
+
+    - name: Display created env files
+      ansible.builtin.debug:
+        msg: "Created {{ docker_verusd_path }}/.env.{{ item.name }}"
+      loop: "{{ networks }}"
+      when: true  # always show
+
+    - name: Create Docker networks
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          CUSTOMENV="{{ docker_verusd_path }}/.env.{{ item.name }}"
+          bash "{{ docker_verusd_path }}/init_network.sh" "$CUSTOMENV"
+        creates: "{{ item.name }}"
+      loop: "{{ networks }}"
+      register: network_create
+
+    - name: Verify network creation
+      ansible.builtin.command:
+        cmd: "docker network inspect {{ item.name }} --format 'Name={{.Name}} Subnet={{range .IPAM.Config}}{{.Subnet}}{{end}}'"
+      loop: "{{ networks }}"
+      register: network_inspect
+      changed_when: false
+
+    - name: Display network details
+      ansible.builtin.debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ network_inspect.results }}"

@@ -1,0 +1,15 @@
+# Playbook: 00-ping.yml
+# Purpose: Verify Ansible connectivity and SSH access to target host
+# Run with: ansible-playbook provisioning/playbooks/00-ping.yml
+---
+- name: Verify connectivity to target host
+  hosts: production
+  gather_facts: false
+  tasks:
+    - name: Ping the target host
+      ansible.builtin.ping:
+    - name: Gather basic facts
+      ansible.builtin.setup:
+    - name: Display connection info
+      ansible.builtin.debug:
+        msg: "Connected to {{ inventory_hostname }} as {{ ansible_user }}"
