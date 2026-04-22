@@ -1,0 +1,6 @@
+# Private credentials — never commit
+group_vars/production-local.yml
+inventory-local.ini
+.env
+*.local.*
+secrets/
