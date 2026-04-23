@@ -1,0 +1,101 @@
+# Playbook: 09-hygiene.yml
+# Purpose: Post-shutdown hygiene check — confirm clean shutdown, flip BOOTSTRAP_FLAG off
+# Run after: daemon has been gracefully stopped via 'verus stop' inside the container
+#
+# This playbook is a once-off after a successful daemon run:
+#   - Reads debug.log tail to confirm "Shutdown: done"
+#   - If confirmed clean → sets BOOTSTRAP_FLAG= (empty) in .env
+#   - If unclean → leaves BOOTSTRAP_FLAG=-bootstrap and reports the issue
+#
+# This is NOT run as part of normal startup flow — it is a manual/scheduled hygiene step
+# to transition a node from bootstrap mode to normal peer-sync mode after first successful run.
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/09-hygiene.yml
+
+---
+- name: VRSC hygiene check
+  hosts: production
+  become: false
+  vars:
+    mainnet_path: "/home/{{ ansible_user }}/docker-verusd/mainnet"
+    data_dir: "{{ mainnet_path }}/data_dir"
+
+  tasks:
+    # 1. Check debug.log for clean shutdown confirmation
+    - name: Read last line of debug.log
+      ansible.builtin.shell:
+        cmd: "tail -1 /root/.komodo/VRSC/debug.log 2>/dev/null"
+      register: debug_log_tail
+      changed_when: false
+      failed_when: false
+
+    - name: Check for Shutdown: done
+      ansible.builtin.set_fact:
+        clean_shutdown: "{{ debug_log_tail.stdout | trim | regex_search('Shutdown: done') != '' }}"
+
+    - name: Display debug.log tail
+      ansible.builtin.debug:
+        msg: "debug.log last line: '{{ debug_log_tail.stdout | trim }}'"
+
+    # 2. Check data dirs are intact
+    - name: Check chainstate directory
+      ansible.builtin.stat:
+        path: "{{ data_dir }}/chainstate"
+      register: chainstate_dir
+
+    - name: Check blocks directory
+      ansible.builtin.stat:
+        path: "{{ data_dir }}/blocks"
+      register: blocks_dir
+
+    # 3. Determine hygiene status
+    - name: Set hygiene status
+      ansible.builtin.set_fact:
+        hygiene_ok: "{{ clean_shutdown | bool and chainstate_dir.stat.exists and blocks_dir.stat.exists }}"
+
+    - name: Display hygiene check result
+      ansible.builtin.debug:
+        msg: |
+          clean_shutdown: {{ clean_shutdown }}
+          chainstate exists: {{ chainstate_dir.stat.exists }}
+          blocks exists: {{ blocks_dir.stat.exists }}
+          hygiene_ok: {{ hygiene_ok }}
+
+    # 4. Flip BOOTSTRAP_FLAG off if hygiene is confirmed
+    - name: Confirm hygiene — disable bootstrap
+      when: hygiene_ok | bool
+      block:
+        - name: Disable bootstrap flag
+          ansible.builtin.lineinfile:
+            path: "{{ mainnet_path }}/.env"
+            regexp: '^VERUSD_BOOTSTRAP_FLAG='
+            line: "VERUSD_BOOTSTRAP_FLAG="
+            state: present
+
+        - name: Read .env
+          ansible.builtin.shell:
+            cmd: "cat {{ mainnet_path }}/.env"
+          changed_when: false
+          register: final_env
+
+        - name: Display success
+          ansible.builtin.debug:
+            msg: |
+              HYGIENE CHECK PASSED
+              BOOTSTRAP_FLAG set to empty — safe to sync from peers.
+              .env contents:
+              {{ final_env.stdout }}
+      rescue:
+        - name: Display failure
+          ansible.builtin.debug:
+            msg: "Failed to update .env — check permissions"
+
+    # 5. Report unclean shutdown — leave bootstrap on
+    - name: Report unclean shutdown
+      when: not (hygiene_ok | bool)
+      ansible.builtin.debug:
+        msg: |
+          HYGIENE CHECK FAILED
+          debug.log does not show clean shutdown, or data dirs are missing.
+          BOOTSTRAP_FLAG left unchanged (-bootstrap).
+          Resolve the issue before running hygiene check again.
