@@ -29,24 +29,16 @@ ELSE
 
 ### Startup Hygiene Check (integrated into 07-setup-vrsc.yml)
 
-`07-setup-vrsc.yml` runs before every container start. It reads the last line of `debug.log` to determine whether bootstrap should be on or off.
+`07-setup-vrsc.yml` runs before every container start. It checks `debug.log` for `Shutdown: done` since the daemon is offline at that point.
 
-### System Hygiene Check (separate playbook)
+### System Hygiene Check (09-hygiene.yml — RPC-based, cron-friendly)
 
-After a clean daemon shutdown, run `09-hygiene.yml` to flip `BOOTSTRAP_FLAG=` off. This is a once-off operation — once the chain is confirmed synced and healthy, bootstrap is disabled permanently until a future need arises (corruption, fresh install, etc.).
+Runs while the daemon is **online**. Uses RPC `getinfo` to check:
+- `blocks == longestchain` → fully synced, no fork → flip `BOOTSTRAP_FLAG=` (empty)
+- `blocks != longestchain` → fork detected → leave `-bootstrap` on, report fork
+- RPC unavailable → daemon offline/unreachable → leave `-bootstrap` on, report
 
-### Clean Shutdown Detection
-
-verusd writes `Shutdown: done` to `debug.log` on graceful exit. This is the canonical check.
-
-```
-# Inside container:
-tail -1 /root/.komodo/VRSC/debug.log
-# Should contain: "Shutdown: done"
-
-# Or for PBaaS:
-tail -1 /root/.verus/pbaas/<hex>/debug.log
-```
+Idempotent and safe to run as a cron job every hour.
 
 ---
 

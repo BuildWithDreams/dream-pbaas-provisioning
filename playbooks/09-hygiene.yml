@@ -1,14 +1,17 @@
 # Playbook: 09-hygiene.yml
-# Purpose: Post-shutdown hygiene check — confirm clean shutdown, flip BOOTSTRAP_FLAG off
-# Run after: daemon has been gracefully stopped via 'verus stop' inside the container
+# Purpose: Post-shutdown hygiene check — verify chain sync state, flip BOOTSTRAP_FLAG off
+# Run after: daemon has been running and is now stopped gracefully
 #
-# This playbook is a once-off after a successful daemon run:
-#   - Reads debug.log tail to confirm "Shutdown: done"
-#   - If confirmed clean → sets BOOTSTRAP_FLAG= (empty) in .env
-#   - If unclean → leaves BOOTSTRAP_FLAG=-bootstrap and reports the issue
+# Uses RPC getinfo to check:
+#   - blocks == longestchain → fully synced, no fork → safe to disable bootstrap
+#   - blocks != longestchain → fork detected → leave bootstrap on, report fork
+#   - Daemon unreachable / RPC error → cannot confirm health → leave bootstrap on
 #
-# This is NOT run as part of normal startup flow — it is a manual/scheduled hygiene step
-# to transition a node from bootstrap mode to normal peer-sync mode after first successful run.
+# This is NOT part of the normal startup flow — it is a manual/scheduled hygiene step
+# to transition a node from bootstrap mode to normal peer-sync after a successful run.
+#
+# Idempotent: safe to run as a cron job every hour.
+# Once BOOTSTRAP_FLAG= is set, subsequent runs report no changes.
 #
 # Run with: ansible-playbook -i inventory.ini playbooks/09-hygiene.yml
 
@@ -18,52 +21,40 @@
   become: false
   vars:
     mainnet_path: "/home/{{ ansible_user }}/docker-verusd/mainnet"
-    data_dir: "{{ mainnet_path }}/data_dir"
+    container_name: "mains_blue-vrsc-1"
 
   tasks:
-    # 1. Check debug.log for clean shutdown confirmation
-    - name: Read last line of debug.log
+    # 1. Check RPC getinfo for chain sync and fork status
+    - name: Get chain sync status via RPC
       ansible.builtin.shell:
-        cmd: "tail -1 /root/.komodo/VRSC/debug.log 2>/dev/null"
-      register: debug_log_tail
+        cmd: "docker exec {{ container_name }} verus getinfo 2>/dev/null"
+      register: getinfo_raw
       changed_when: false
       failed_when: false
 
-    - name: Check for Shutdown: done
+    - name: Parse getinfo
       ansible.builtin.set_fact:
-        clean_shutdown: "{{ debug_log_tail.stdout | trim | regex_search('Shutdown: done') != '' }}"
+        getinfo_parsed: "{{ getinfo_raw.stdout | from_json if getinfo_raw.stdout | length > 0 else {} }}"
 
-    - name: Display debug.log tail
-      ansible.builtin.debug:
-        msg: "debug.log last line: '{{ debug_log_tail.stdout | trim }}'"
-
-    # 2. Check data dirs are intact
-    - name: Check chainstate directory
-      ansible.builtin.stat:
-        path: "{{ data_dir }}/chainstate"
-      register: chainstate_dir
-
-    - name: Check blocks directory
-      ansible.builtin.stat:
-        path: "{{ data_dir }}/blocks"
-      register: blocks_dir
-
-    # 3. Determine hygiene status
-    - name: Set hygiene status
+    - name: Extract sync and fork data
       ansible.builtin.set_fact:
-        hygiene_ok: "{{ clean_shutdown | bool and chainstate_dir.stat.exists and blocks_dir.stat.exists }}"
+        blocks: "{{ getinfo_parsed.blocks | default(0) }}"
+        longestchain: "{{ getinfo_parsed.longestchain | default(0) }}"
+        fork_detected: "{{ getinfo_parsed.blocks | default(0) != getinfo_parsed.longestchain | default(0) }}"
+        rpc_available: "{{ getinfo_raw.stdout | length > 0 }}"
 
-    - name: Display hygiene check result
+    - name: Display chain status
       ansible.builtin.debug:
         msg: |
-          clean_shutdown: {{ clean_shutdown }}
-          chainstate exists: {{ chainstate_dir.stat.exists }}
-          blocks exists: {{ blocks_dir.stat.exists }}
-          hygiene_ok: {{ hygiene_ok }}
+          RPC available: {{ rpc_available }}
+          blocks: {{ blocks }}
+          longestchain: {{ longestchain }}
+          fork_detected: {{ fork_detected }}
+          synced (blocks == longestchain): {{ not fork_detected }}
 
-    # 4. Flip BOOTSTRAP_FLAG off if hygiene is confirmed
+    # 4. Flip BOOTSTRAP_FLAG off if chain is synced and no fork detected
     - name: Confirm hygiene — disable bootstrap
-      when: hygiene_ok | bool
+      when: rpc_available and not fork_detected
       block:
         - name: Disable bootstrap flag
           ansible.builtin.lineinfile:
@@ -82,6 +73,7 @@
           ansible.builtin.debug:
             msg: |
               HYGIENE CHECK PASSED
+              Chain fully synced (blocks == longestchain), no fork detected.
               BOOTSTRAP_FLAG set to empty — safe to sync from peers.
               .env contents:
               {{ final_env.stdout }}
@@ -90,12 +82,12 @@
           ansible.builtin.debug:
             msg: "Failed to update .env — check permissions"
 
-    # 5. Report unclean shutdown — leave bootstrap on
-    - name: Report unclean shutdown
-      when: not (hygiene_ok | bool)
+    # 5. Report fork or RPC failure — leave bootstrap on
+    - name: Report fork or RPC failure
+      when: not (rpc_available and not fork_detected)
       ansible.builtin.debug:
         msg: |
           HYGIENE CHECK FAILED
-          debug.log does not show clean shutdown, or data dirs are missing.
+          {{ 'Fork detected (blocks != longestchain)' if rpc_available and fork_detected else 'RPC unavailable — daemon may not be running' }}.
           BOOTSTRAP_FLAG left unchanged (-bootstrap).
           Resolve the issue before running hygiene check again.

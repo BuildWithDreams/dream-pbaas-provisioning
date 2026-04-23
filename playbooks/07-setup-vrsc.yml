@@ -4,7 +4,7 @@
 #
 # Bootstrap logic (robust — two conditions required to disable bootstrap):
 #   1. data_dir/chainstate AND data_dir/blocks exist
-#   2. data_dir/VRSC/debug.log ends with "Shutdown: done"
+#   2. data_dir/VRSC/debug.log ends with "Shutdown: done" (clean prior shutdown)
 # If both true  → VERUSD_BOOTSTRAP_FLAG= (empty — safe to sync from peers)
 # If either false → VERUSD_BOOTSTRAP_FLAG=-bootstrap (ensure clean state)
 
@@ -66,8 +66,8 @@
         path: "{{ data_dir }}/blocks"
       register: blocks_dir
 
-    # 4. Check debug.log for clean shutdown (condition 2 of 2 for disabling bootstrap)
-    - name: Check debug.log tail for clean shutdown
+    # 4. Check debug.log for clean shutdown (condition 2 of 2 — daemon is offline here, use log)
+    - name: Check debug.log for clean shutdown
       ansible.builtin.shell:
         cmd: "tail -1 /root/.komodo/VRSC/debug.log 2>/dev/null || echo '{{ '{{' }}NO_LOG{{ '}}' }}"
       register: debug_log_tail
@@ -100,7 +100,7 @@
         msg: |
           is_first_run: {{ is_first_run }}
           BOOTSTRAP_FLAG set to '{{ new_bootstrap_flag }}'
-          Reason: {{ 'bootstrap required — data dirs missing or unclean shutdown' if is_first_run else 'safe to sync from peers — clean shutdown confirmed' }}
+          Reason: {{ 'bootstrap required — data dirs missing or unclean prior shutdown' if is_first_run else 'safe to sync from peers — clean shutdown confirmed' }}"
 
     # 6. Update BOOTSTRAP_FLAG in .env
     - name: Update BOOTSTRAP_FLAG in .env
