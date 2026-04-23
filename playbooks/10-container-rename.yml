@@ -1,0 +1,110 @@
+# Playbook: 10-container-rename.yml
+# Purpose: Rename the running VRSC container by updating COMPOSE_PROJECT_NAME in .env
+#          Stops the old container, updates .env, restarts with new name.
+#
+# Prerequisite: Issue #2 (COMPOSE_PROJECT_NAME rename) must be resolved first.
+# Run with: ansible-playbook -i inventory.ini playbooks/10-container-rename.yml
+
+---
+- name: Rename VRSC container
+  hosts: production
+  become: false
+  vars:
+    mainnet_path: "/home/{{ ansible_user }}/docker-verusd/mainnet"
+    old_container_candidates:
+      - "pbaas_mainnets-vrsc-1"
+      - "mains_blue-vrsc-1"
+
+  tasks:
+    # 1. Stop the running container
+    - name: Stop VRSC container
+      ansible.builtin.shell:
+        cmd: "cd {{ mainnet_path }} && docker-compose down 2>/dev/null || true"
+      register: compose_down
+      changed_when: true
+
+    - name: Confirm container stopped
+      ansible.builtin.debug:
+        msg: "Container stopped: {{ compose_down.stdout }}"
+
+    # 2. Update COMPOSE_PROJECT_NAME in .env
+    - name: Verify current .env contents
+      ansible.builtin.shell:
+        cmd: "cat {{ mainnet_path }}/.env"
+      register: env_before
+      changed_when: false
+
+    - name: Display current .env
+      ansible.builtin.debug:
+        msg: ".env before rename:\n{{ env_before.stdout }}"
+
+    - name: Update COMPOSE_PROJECT_NAME
+      ansible.builtin.lineinfile:
+        path: "{{ mainnet_path }}/.env"
+        regexp: '^COMPOSE_PROJECT_NAME='
+        line: "COMPOSE_PROJECT_NAME=mains_blue"
+      register: compose_renamed
+
+    - name: Display rename result
+      ansible.builtin.debug:
+        msg: "Updated COMPOSE_PROJECT_NAME=mains_blue"
+
+    # 3. Verify new .env
+    - name: Read updated .env
+      ansible.builtin.shell:
+        cmd: "cat {{ mainnet_path }}/.env"
+      register: env_after
+      changed_when: false
+
+    - name: Display updated .env
+      ansible.builtin.debug:
+        msg: ".env after rename:\n{{ env_after.stdout }}"
+
+    # 4. Verify bootstrap flag — chain is synced, must be empty
+    - name: Verify BOOTSTRAP_FLAG
+      ansible.builtin.shell:
+        cmd: "grep '^VERUSD_BOOTSTRAP_FLAG=' {{ mainnet_path }}/.env"
+      register: bootstrap_line
+      changed_when: false
+      failed_when: false
+
+    - name: Check bootstrap flag value
+      assert:
+        that:
+          - "bootstrap_line.stdout == 'VERUSD_BOOTSTRAP_FLAG='"
+          fail_msg: "BOOTSTRAP_FLAG must be empty (chain is synced). Current: {{ bootstrap_line.stdout }}"
+        success_msg: "BOOTSTRAP_FLAG= (empty) confirmed — safe to restart without bootstrap"
+
+    # 5. Start container with new name
+    - name: Start VRSC container with new name
+      ansible.builtin.shell:
+        cmd: "cd {{ mainnet_path }} && docker-compose up -d 2>&1"
+      register: compose_up
+
+    - name: Wait for container to start
+      ansible.builtin.pause:
+        seconds: 5
+
+    # 6. Verify new container name
+    - name: Verify new container name
+      ansible.builtin.shell:
+        cmd: "docker ps --format '{{.Names}}' | grep -E '^mains_blue-vrsc-1$'"
+      register: new_container_check
+      changed_when: false
+      failed_when: false
+
+    - name: Confirm new container
+      ansible.builtin.debug:
+        msg: "New container: {{ new_container_check.stdout | default('NOT FOUND') }}"
+
+    # 7. Verify RPC is responding
+    - name: Verify RPC responding
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vrsc-1 verus getinfo 2>/dev/null | python3 -c \"import json,sys; d=json.load(sys.stdin); print(f'blocks={d[\\\"blocks\\\"]} longestchain={d[\\\"longestchain\\\"]} connections={d[\\\"connections\\\"]}')\""
+      register: getinfo_check
+      changed_when: false
+      failed_when: false
+
+    - name: Confirm RPC
+      ansible.builtin.debug:
+        msg: "RPC check: {{ getinfo_check.stdout | default('FAILED') }}"

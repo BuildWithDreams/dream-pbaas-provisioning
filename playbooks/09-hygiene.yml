@@ -21,13 +21,34 @@
   become: false
   vars:
     mainnet_path: "/home/{{ ansible_user }}/docker-verusd/mainnet"
-    container_name: "mains_blue-vrsc-1"
+    # Fallback list — tries in order until a running container is found
+    # When COMPOSE_PROJECT_NAME=mains_blue is applied, use mains_blue-vrsc-1
+    container_candidates:
+      - "mains_blue-vrsc-1"
+      - "pbaas_mainnets-vrsc-1"
 
   tasks:
-    # 1. Check RPC getinfo for chain sync and fork status
+    # 1. Find the active VRSC container (first match that is running)
+    - name: Detect running VRSC container
+      ansible.builtin.shell: |
+        for c in {{ container_candidates | map('quote') | join(' ') }}; do
+          if docker ps --format '{{' '{{' }}.Names{{ '}' }}{{' }}' | grep -q "^$c$"; then
+            echo "$c"
+            exit 0
+          fi
+        done
+      register: container_detect
+      changed_when: false
+      failed_when: false
+
+    - name: Set container name
+      ansible.builtin.set_fact:
+        container_name: "{{ container_detect.stdout | trim }}"
+
+    # 2. Check RPC getinfo for chain sync and fork status
     - name: Get chain sync status via RPC
-      ansible.builtin.shell:
-        cmd: "docker exec {{ container_name }} verus getinfo 2>/dev/null"
+      ansible.builtin.shell: |
+        docker exec {{ container_name }} verus getinfo 2>/dev/null || echo '{}'
       register: getinfo_raw
       changed_when: false
       failed_when: false
