@@ -23,16 +23,16 @@
         group: "{{ ansible_user }}"
       register: env_copy
 
-    # 2. Look up the actual subnet for net-vrsc-blue
+    # 2. Look up the actual subnet for net-vrsc-blue (shell needed for pipe)
     - name: Get net-vrsc-blue subnet
-      ansible.builtin.command:
-        cmd: "docker network inspect net-vrsc-blue --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'"
+      ansible.builtin.shell:
+        cmd: "docker network inspect net-vrsc-blue | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d[0]['IPAM']['Config'][0]['Subnet'])\""
       register: vrsc_subnet_output
       changed_when: false
 
     - name: Derive verusd IP from subnet
       ansible.builtin.set_fact:
-        vrsc_ip: "{{ vrsc_subnet_output.stdout | regex_replace('(\\\\d+\\\\.\\\\d+\\\\.\\\\d+\\\\.)\\\\d+/\\\\d+', '\\\\g<1>11') }}"
+        vrsc_ip: "{{ vrsc_subnet_output.stdout | regex_replace('(\\d+\\.\\d+\\.\\d+\\.)\\d+/\\d+', '\\g<1>11') }}"
 
     - name: Update VERUSD_IPV4 in .env
       ansible.builtin.lineinfile:
