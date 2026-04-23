@@ -1,0 +1,115 @@
+# Playbook: 10-shutdown-vrsc.yml
+# Purpose: Gracefully shut down the VRSC mainnet container.
+#          Idempotent — safe to run even if no container is running.
+#
+# What it does:
+#   1. Detect running VRSC container by name pattern
+#   2. Wait for daemon to be ready (block index loaded) — polling getinfo
+#   3. Signal verusd to stop gracefully (verus-cli stop)
+#   4. docker stop with extended timeout
+#   5. Disconnect from network to release the IP
+#   6. Ensure BOOTSTRAP_FLAG is cleared in .env (clean shutdown marker)
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/10-shutdown-vrsc.yml
+
+---
+- name: Shutdown VRSC mainnet
+  hosts: production
+  become: false
+  vars:
+    mainnet_path: "/home/{{ ansible_user }}/docker-verusd/mainnet"
+    # Daemon readiness check — wait up to 5 min for block index to load
+    startup_wait_seconds: 300
+    startup_poll_seconds: 15
+
+  tasks:
+    # 1. Detect running VRSC container
+    - name: Find running VRSC container
+      ansible.builtin.shell:
+        cmd: !unsafe "docker ps --format '{{.Names}}' | grep -E '(-vrsc-1|mains_blue-vrsc-1|pbaas_mainnets-vrsc-1)$' | head -1 || true"
+      register: running_container
+      changed_when: false
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "Found container: {{ running_container.stdout | default('none') }}"
+      when: running_container.stdout | length > 0
+
+    - name: Skip if no container running
+      ansible.builtin.debug:
+        msg: "No VRSC container running — nothing to shutdown"
+      when: running_container.stdout | length == 0
+
+    # 2. Wait for daemon to be ready (block index loaded) before sending stop signal
+    - name: Wait for daemon to be ready
+      ansible.builtin.shell:
+        cmd: "docker exec {{ running_container.stdout }} verus getinfo 2>&1"
+      register: getinfo_result
+      changed_when: false
+      failed_when: false
+      until: "'Loading block index' not in getinfo_result.stdout and getinfo_result.rc == 0"
+      retries: "{{ (startup_wait_seconds / startup_poll_seconds) | int }}"
+      delay: "{{ startup_poll_seconds }}"
+      when: running_container.stdout | length > 0
+      register: daemon_ready
+
+    - name: Check if daemon is still loading
+      ansible.builtin.debug:
+        msg: "Daemon is still loading block index — waiting... (this is normal after a no-bootstrap restart)"
+      when: running_container.stdout | length > 0 and daemon_ready.changed
+
+    # 3. Graceful verusd shutdown (verus-cli stop)
+    - name: Signal verusd to stop gracefully
+      ansible.builtin.shell:
+        cmd: "docker exec {{ running_container.stdout }} verus-cli stop 2>&1 || true"
+      register: graceful_stop
+      changed_when: true
+      failed_when: false
+      when: running_container.stdout | length > 0
+
+    - name: Wait for verusd to finish shutdown
+      ansible.builtin.pause:
+        seconds: 15
+      when: running_container.stdout | length > 0
+
+    # 4. Stop container (extended timeout for I/O-bound flush)
+    - name: Stop container
+      ansible.builtin.shell:
+        cmd: "docker stop -t 60 {{ running_container.stdout }} 2>&1 || true"
+        timeout: 90
+      register: docker_stop
+      changed_when: true
+      failed_when: false
+      when: running_container.stdout | length > 0
+
+    - name: Confirm container stopped
+      ansible.builtin.debug:
+        msg: "Container stop result: {{ docker_stop.stdout | default('n/a') }}"
+
+    # 5. Disconnect network (release IP allocation)
+    - name: Disconnect container network
+      ansible.builtin.shell:
+        cmd: "docker network disconnect net-vrsc-blue {{ running_container.stdout }} 2>/dev/null || true"
+      changed_when: false
+      failed_when: false
+      when: running_container.stdout | length > 0
+
+    # 6. Ensure BOOTSTRAP_FLAG is cleared — clean shutdown means next start syncs from peers
+    - name: Verify BOOTSTRAP_FLAG
+      ansible.builtin.shell:
+        cmd: "grep '^VERUSD_BOOTSTRAP_FLAG=' {{ mainnet_path }}/.env"
+      register: bootstrap_line
+      changed_when: false
+      failed_when: false
+
+    - name: Clear BOOTSTRAP_FLAG for clean shutdown
+      ansible.builtin.lineinfile:
+        path: "{{ mainnet_path }}/.env"
+        regexp: '^VERUSD_BOOTSTRAP_FLAG=.*'
+        line: "VERUSD_BOOTSTRAP_FLAG="
+      when: bootstrap_line.stdout != 'VERUSD_BOOTSTRAP_FLAG='
+      register: bootstrap_cleared
+
+    - name: Confirm clean shutdown flag
+      ansible.builtin.debug:
+        msg: "{{ 'BOOTSTRAP_FLAG cleared — clean shutdown recorded' if bootstrap_cleared.changed else 'BOOTSTRAP_FLAG already empty' }}"
