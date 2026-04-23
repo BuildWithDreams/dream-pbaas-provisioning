@@ -1,0 +1,106 @@
+# Playbook: 05-build-image.yml
+# Purpose: Update Dockerfile version, build.sh, compose, and build the Docker image
+# Run with: ansible-playbook -i inventory.ini playbooks/05-build-image.yml
+# Requires: docker-verusd repo cloned at /home/{{ ansible_user }}/docker-verusd
+
+---
+- name: Build Verus Docker image
+  hosts: production
+  become: true
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    verus_repo: "VerusCoin/VerusCoin"
+    image_name: "buildwithdreams/verusd"
+
+  tasks:
+    - name: Fetch latest release version from GitHub
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ verus_repo }}/releases/latest"
+        method: GET
+        headers:
+          Accept: "application/vnd.github+json"
+        timeout: 15
+      register: github_release
+      changed_when: false
+
+    - name: Set latest version fact
+      ansible.builtin.set_fact:
+        latest_version: "{{ github_release.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Display build plan
+      ansible.builtin.debug:
+        msg: "Building {{ image_name }}:{{ latest_version }} from {{ docker_verusd_path }}"
+
+    # 1. Update Dockerfile ARG VERUS_VERSION
+    - name: Update Dockerfile VERUS_VERSION
+      ansible.builtin.replace:
+        path: "{{ docker_verusd_path }}/Dockerfile"
+        regexp: '^ARG VERUS_VERSION=.*'
+        replace: 'ARG VERUS_VERSION={{ latest_version }}'
+      register: dockerfile_updated
+
+    - name: Display Dockerfile update result
+      ansible.builtin.debug:
+        msg: "Dockerfile updated: {{ dockerfile_updated.changed }} (changed=true means version was outdated)"
+
+    # 2. Update build.sh to use versioned tag with buildwithdreams org
+    - name: Update build.sh with versioned tag
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          # Build script for buildwithdreams/verusd
+          # Usage: ./build.sh [version]
+          VERUS_VERSION=${1:-{{ latest_version }}}}
+          docker build --build-arg VERUS_VERSION="${VERUS_VERSION}" -t {{ image_name }}:${VERUS_VERSION} .
+          docker tag {{ image_name }}:${VERUS_VERSION}} {{ image_name}}:latest
+        dest: "{{ docker_verusd_path }}/build.sh"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    # 3. Update mainnet/docker-compose.yml to use versioned image and correct zcash-params path
+    - name: Update compose image tag
+      ansible.builtin.replace:
+        path: "{{ docker_verusd_path }}/mainnet/docker-compose.yml"
+        regexp: '^    image: verustrading/verusd:0.1'
+        replace: '    image: {{ image_name }}:{{ latest_version }}'
+      register: compose_updated
+
+    - name: Fix zcash-params volume mount path in compose
+      ansible.builtin.replace:
+        path: "{{ docker_verusd_path }}/mainnet/docker-compose.yml"
+        regexp: '^\s+- /home/\$\{USER\}/.zcash-params'
+        replace: '      - /home/{{ ansible_user }}/.zcash-params'
+      register: zcash_path_updated
+
+    # 4. Update mainnet/env.sample to include VERUSD_IMAGE_TAG
+    - name: Update env.sample with image tag variable
+      ansible.builtin.lineinfile:
+        path: "{{ docker_verusd_path }}/mainnet/env.sample"
+        regexp: '^VERUSD_IMAGE_TAG='
+        line: 'VERUSD_IMAGE_TAG={{ latest_version }}'
+        state: present
+        create: true
+      register: env_sample_updated
+
+    # 5. Build the Docker image
+    - name: Build Docker image
+      ansible.builtin.command:
+        cmd: "docker build --build-arg VERUS_VERSION={{ latest_version }} -t {{ image_name }}:{{ latest_version }} -t {{ image_name }}:latest {{ docker_verusd_path }}"
+      register: build_result
+
+    - name: Display build output
+      ansible.builtin.debug:
+        msg: "Build completed: {{ build_result.stdout_lines | last }}"
+      when: build_result.changed
+
+    - name: Verify image exists
+      ansible.builtin.command:
+        cmd: "docker image inspect {{ image_name }}:{{ latest_version }}"
+      register: image_inspect
+      changed_when: false
+
+    - name: Display image details
+      ansible.builtin.debug:
+        msg: "Image {{ image_name }}:{{ latest_version }} — {{ image_inspect.stdout_lines[0].Size | human_readable if image_inspect.stdout_lines[0].Size is defined else 'built successfully' }}"
+      when: image_inspect.stdout_lines[0] is defined

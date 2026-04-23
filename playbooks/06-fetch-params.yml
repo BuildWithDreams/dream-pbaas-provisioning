@@ -1,0 +1,56 @@
+# Playbook: 06-fetch-params.yml
+# Purpose: Download Zcash zkSNARK parameters on target host
+# Run with: ansible-playbook -i inventory.ini playbooks/06-fetch-params.yml
+
+---
+- name: Fetch Zcash params
+  hosts: production
+  become: true
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    zcash_params_dir: "/home/{{ ansible_user }}/.zcash-params"
+
+  tasks:
+    - name: Check if params already exist
+      ansible.builtin.stat:
+        path: "{{ zcash_params_dir }}/sapling-spend.params"
+      register: sapling_spend_check
+
+    - name: Display params status
+      ansible.builtin.debug:
+        msg: |
+          {% if sapling_spend_check.stat.exists %}
+          Zcash params already present at {{ zcash_params_dir }}
+          {% else %}
+          Zcash params not found — will download (~800MB Sapling only)
+          {% endif %}
+
+    - name: Ensure zcash params directory exists
+      ansible.builtin.file:
+        path: "{{ zcash_params_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Make fetch-params.sh executable
+      ansible.builtin.file:
+        path: "{{ docker_verusd_path }}/fetch-params.sh"
+        mode: '0755'
+
+    - name: Run fetch-params.sh
+      ansible.builtin.command:
+        cmd: "bash {{ docker_verusd_path }}/fetch-params.sh"
+        creates: "{{ zcash_params_dir }}/sapling-spend.params"
+      register: fetch_result
+      changed_when: fetch_result.changed
+
+    - name: Verify params files exist
+      ansible.builtin.command:
+        cmd: "ls -lh {{ zcash_params_dir }}/"
+      register: params_list
+      changed_when: false
+
+    - name: Display params files
+      ansible.builtin.debug:
+        msg: "{{ params_list.stdout }}"

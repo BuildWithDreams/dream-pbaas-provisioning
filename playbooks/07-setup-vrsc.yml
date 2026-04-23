@@ -1,0 +1,100 @@
+# Playbook: 07-setup-vrsc.yml
+# Purpose: Set up VRSC mainnet environment — copy env.sample, detect first run, set bootstrap flag
+# Run with: ansible-playbook -i inventory.ini playbooks/07-setup-vrsc.yml
+
+---
+- name: Set up VRSC mainnet
+  hosts: production
+  become: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    mainnet_path: "/home/{{ ansible_user }}/docker-verusd/mainnet"
+    data_dir: "{{ mainnet_path }}/data_dir"
+
+  tasks:
+    # 1. Copy env.sample to .env
+    - name: Copy env.sample to .env
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ mainnet_path }}/env.sample"
+        dest: "{{ mainnet_path }}/.env"
+        mode: '0644'
+      register: env_copy
+
+    - name: Display env copy result
+      ansible.builtin.debug:
+        msg: "env.sample copied to {{ mainnet_path }}/.env"
+
+    # 2. Ensure data_dir structure exists (directory for Docker volume mount)
+    - name: Ensure data_dir exists
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: directory
+        mode: '0755'
+
+    # 3. Detect first run — check if chainstate and blocks dirs exist with content
+    - name: Check data_dir contents
+      ansible.builtin.command:
+        cmd: "ls -la {{ data_dir }}/"
+      register: data_dir_contents
+      changed_when: false
+
+    - name: Check for chainstate directory
+      ansible.builtin.stat:
+        path: "{{ data_dir }}/chainstate"
+      register: chainstate_dir
+
+    - name: Check for blocks directory
+      ansible.builtin.stat:
+        path: "{{ data_dir }}/blocks"
+      register: blocks_dir
+
+    - name: Determine if first run
+      ansible.builtin.set_fact:
+        is_first_run: "{{ not (chainstate_dir.stat.exists and blocks_dir.stat.exists) }}"
+
+    - name: Display first run detection
+      ansible.builtin.debug:
+        msg: |
+          data_dir contents: {{ data_dir_contents.stdout_lines | join(' | ') }}
+          chainstate exists: {{ chainstate_dir.stat.exists }}
+          blocks exists: {{ blocks_dir.stat.exists }}
+          First run: {{ is_first_run }}
+      when: false  # always run
+
+    # 4. Read current BOOTSTRAP_FLAG from .env
+    - name: Read current .env
+      ansible.builtin.command:
+        cmd: "cat {{ mainnet_path }}/.env"
+      register: current_env
+      changed_when: false
+
+    - name: Set bootstrap fact
+      ansible.builtin.set_fact:
+        new_bootstrap_flag: "{{ '-bootstrap' if is_first_run | bool else '' }}"
+
+    - name: Display bootstrap decision
+      ansible.builtin.debug:
+        msg: |
+          First run detected: {{ is_first_run }}
+          Setting BOOTSTRAP_FLAG={{ new_bootstrap_flag | default('(empty — sync from peers)') }}
+
+    # 5. Update BOOTSTRAP_FLAG in .env
+    - name: Update BOOTSTRAP_FLAG in .env
+      ansible.builtin.lineinfile:
+        path: "{{ mainnet_path }}/.env"
+        regexp: '^VERUSD_BOOTSTRAP_FLAG='
+        line: "VERUSD_BOOTSTRAP_FLAG={{ new_bootstrap_flag }}"
+        state: present
+      register: bootstrap_updated
+
+    - name: Display updated .env
+      ansible.builtin.debug:
+        msg: "BOOTSTRAP_FLAG set to '{{ new_bootstrap_flag }}' in {{ mainnet_path }}/.env"
+
+    # 6. Update .env with versioned image tag (from 05-build-image.yml output)
+    - name: Display final .env contents
+      ansible.builtin.debug:
+        msg: |
+          .env setup complete:
+          {{ current_env.stdout }}

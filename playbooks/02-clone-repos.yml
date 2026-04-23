@@ -10,7 +10,7 @@
   vars:
     # Add repositories here: { repo: "git@github.com:org/repo.git", dest: "~/repo-name" }
     clone_repos:
-      - { repo: "https://github.com/YOUR_ORG/docker-verusd.git", dest: "/home/{{ ansible_user }}/{{ clone_destinations.docker_verusd }}" }
+      - { repo: "https://github.com/BuildWithDreams/docker-verusd.git", dest: "/home/{{ ansible_user }}/{{ clone_destinations.docker_verusd }}" }
 
   tasks:
     - name: Clone repository

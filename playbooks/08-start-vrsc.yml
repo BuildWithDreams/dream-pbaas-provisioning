@@ -1,0 +1,105 @@
+# Playbook: 08-start-vrsc.yml
+# Purpose: Start VRSC mainnet container via docker-compose
+# Run with: ansible-playbook -i inventory.ini playbooks/08-start-vrsc.yml
+
+---
+- name: Start VRSC mainnet
+  hosts: production
+  become: true
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    mainnet_path: "/home/{{ ansible_user }}/docker-verusd/mainnet"
+    image_name: "buildwithdreams/verusd"
+
+  tasks:
+    # 1. Fetch latest verus version for image tag
+    - name: Fetch latest Verus release version
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/VerusCoin/VerusCoin/releases/latest"
+        method: GET
+        headers:
+          Accept: "application/vnd.github+json"
+        timeout: 15
+      register: github_release
+      changed_when: false
+
+    - name: Resolve image tag
+      ansible.builtin.set_fact:
+        verus_image_tag: "{{ github_release.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Read .env for network name
+      ansible.builtin.command:
+        cmd: "cat {{ mainnet_path }}/.env"
+      register: vrsc_env
+      changed_when: false
+
+    - name: Set Docker network name fact
+      ansible.builtin.set_fact:
+        docker_network_name: "{{ vrsc_env.stdout | regex_search('DOCKER_NETWORK_NAME=(\\S+)', '\\1') | first }}"
+
+    - name: Display resolved settings
+      ansible.builtin.debug:
+        msg: |
+          Network: {{ docker_network_name }}
+          Image: {{ image_name }}:{{ verus_image_tag }}
+
+    # 2. Verify Docker network exists
+    - name: Check if Docker network exists
+      ansible.builtin.command:
+        cmd: "docker network inspect {{ docker_network_name }}"
+      register: network_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if network not found
+      ansible.builtin.fail:
+        msg: "Network '{{ docker_network_name }}' not found. Run 03-docker-networks.yml first."
+      when: network_check.rc != 0
+
+    - name: Display network info
+      ansible.builtin.debug:
+        msg: "Network '{{ docker_network_name }}' exists — proceeding"
+      when: network_check.rc == 0
+
+    # 3. Build compose command with env vars
+    - name: Load env vars and start container
+      ansible.builtin.shell:
+        cmd: |
+          set -a
+          source "{{ mainnet_path }}/.env"
+          set +a
+          cd "{{ mainnet_path }}"
+          # Use versioned image always
+          IMAGE="{{ image_name }}:{{ verus_image_tag }}"
+          docker compose pull
+          IMAGE="{{ image_name }}:{{ verus_image_tag }}" docker compose up -d
+        creates: "{{ mainnet_path }}/.env"
+      register: compose_up
+      changed_when: true
+
+    - name: Display compose output
+      ansible.builtin.debug:
+        msg: "{{ compose_up.stdout_lines }}"
+
+    # 4. Verify container is running
+    - name: Check container status
+      ansible.builtin.command:
+        cmd: "docker ps --filter 'name=vrsc' --format 'table {{.Names}}\\t{{.Status}}\\t{{.Image}}'"
+      register: container_status
+      changed_when: false
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "{{ container_status.stdout }}"
+
+    # 5. Follow startup logs (last 30 lines)
+    - name: Check startup logs
+      ansible.builtin.command:
+        cmd: "docker logs vrsc --tail 30 2>&1"
+      register: vrsc_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Display recent logs
+      ansible.builtin.debug:
+        msg: "{{ vrsc_logs.stdout }}"

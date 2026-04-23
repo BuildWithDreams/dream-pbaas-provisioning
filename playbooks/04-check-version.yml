@@ -1,0 +1,52 @@
+# Playbook: 04-check-version.yml
+# Purpose: Check if Dockerfile VERUS_VERSION matches latest GitHub release
+# Run with: ansible-playbook -i inventory.ini playbooks/04-check-version.yml [-e verus_version=X.X.XX]
+
+---
+- name: Check Verus version
+  hosts: production
+  become: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    verus_repo: "VerusCoin/VerusCoin"
+
+  tasks:
+    - name: Check current Dockerfile VERUS_VERSION
+      ansible.builtin.command:
+        cmd: grep -oP 'ARG VERUS_VERSION=\K[0-9.]+' "{{ docker_verusd_path }}/Dockerfile"
+      register: current_version_raw
+      changed_when: false
+
+    - name: Set current version fact
+      ansible.builtin.set_fact:
+        dockerfile_version: "{{ current_version_raw.stdout }}"
+
+    - name: Fetch latest release version from GitHub
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ verus_repo }}/releases/latest"
+        method: GET
+        headers:
+          Accept: "application/vnd.github+json"
+        timeout: 15
+      register: github_release
+      changed_when: false
+
+    - name: Set latest version fact
+      ansible.builtin.set_fact:
+        latest_version: "{{ github_release.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Display version comparison
+      ansible.builtin.debug:
+        msg: |
+          Dockerfile version : {{ dockerfile_version }}
+          Latest GitHub release: v{{ latest_version }}
+          {% if dockerfile_version == latest_version %}STATUS: UP TO DATE{% else %}STATUS: UPDATE AVAILABLE{% endif %}
+
+    - name: Check if update required
+      ansible.builtin.set_fact:
+        update_required: "{{ dockerfile_version != latest_version }}"
+
+    - name: Fail if versions don't match
+      ansible.builtin.fail:
+        msg: "Dockerfile version {{ dockerfile_version }} does not match latest {{ latest_version }}. Run 05-build-image.yml to update."
+      when: update_required | bool
