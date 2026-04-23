@@ -28,7 +28,10 @@ clone_destinations:
 # Each network gets its own subnet with readable bridge name
 # IP convention per service: .11=verusd, .12=RPC, .13=explorer, .14=ID verify
 # Subnet: use any private range (e.g. 10.x.x.x/24, 192.168.x.x/24)
-# Bridge name: br-SP + last 9 digits of subnet without dots
+# Bridge name: SP + first3octets .1 with dots removed (e.g. 10.201.0.0/24 → SP1020101)
+#
+# ⚠️ DO NOT EDIT verus_networks HERE — edit env.sample files in docker-verusd repo,
+#    then run playbooks/02-generate-env-files.yml to regenerate group_vars/generated_networks.yml
 verus_networks:
   - name: net-vrsc-blue
     subnet: 10.201.0.0/24
