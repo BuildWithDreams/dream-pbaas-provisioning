@@ -60,8 +60,8 @@
       register: network_create
 
     - name: Verify network creation
-      ansible.builtin.command:
-        cmd: "docker network inspect {{ item.name }} --format 'Name={{.Name}} Subnet={{range .IPAM.Config}}{{.Subnet}}{{end}}'"
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ item.name }} > /tmp/net_inspect.json && python3 -c \"import json; d=json.load(open('/tmp/net_inspect.json'))[0]; print('Name='+d['Name']+' Subnet='+d['IPAM']['Config'][0]['Subnet'])\""
       loop: "{{ networks }}"
       register: network_inspect
       changed_when: false

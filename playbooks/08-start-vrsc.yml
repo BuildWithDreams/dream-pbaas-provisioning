@@ -69,11 +69,8 @@
           source "{{ mainnet_path }}/.env"
           set +a
           cd "{{ mainnet_path }}"
-          # Use versioned image always
-          IMAGE="{{ image_name }}:{{ verus_image_tag }}"
-          docker compose pull
+          IMAGE="{{ image_name }}:{{ verus_image_tag }}" docker compose pull
           IMAGE="{{ image_name }}:{{ verus_image_tag }}" docker compose up -d
-        creates: "{{ mainnet_path }}/.env"
       register: compose_up
       changed_when: true
 
@@ -82,24 +79,14 @@
         msg: "{{ compose_up.stdout_lines }}"
 
     # 4. Verify container is running
-    - name: Check container status
-      ansible.builtin.command:
-        cmd: "docker ps --filter 'name=vrsc' --format 'table {{.Names}}\\t{{.Status}}\\t{{.Image}}'"
-      register: container_status
-      changed_when: false
-
-    - name: Display container status
-      ansible.builtin.debug:
-        msg: "{{ container_status.stdout }}"
-
-    # 5. Follow startup logs (last 30 lines)
-    - name: Check startup logs
-      ansible.builtin.command:
-        cmd: "docker logs vrsc --tail 30 2>&1"
-      register: vrsc_logs
+    - name: Check container status and logs
+      ansible.builtin.script:
+        cmd: scripts/check-vrsc-container.sh
+      register: container_check
       changed_when: false
       failed_when: false
 
-    - name: Display recent logs
+    - name: Display container status
       ansible.builtin.debug:
-        msg: "{{ vrsc_logs.stdout }}"
+        msg: "{{ container_check.stdout }}"
+      when: container_check.stdout | length > 0

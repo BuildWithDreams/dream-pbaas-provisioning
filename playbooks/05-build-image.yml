@@ -73,7 +73,7 @@
         replace: '      - /home/{{ ansible_user }}/.zcash-params'
       register: zcash_path_updated
 
-    # 4. Update mainnet/env.sample to include VERUSD_IMAGE_TAG
+    # 4. Update mainnet/env.sample to include VERUSD_IMAGE_TAG and fix network name
     - name: Update env.sample with image tag variable
       ansible.builtin.lineinfile:
         path: "{{ docker_verusd_path }}/mainnet/env.sample"
@@ -83,6 +83,20 @@
         create: true
       register: env_sample_updated
 
+    - name: Fix DOCKER_NETWORK_NAME in env.sample
+      ansible.builtin.replace:
+        path: "{{ docker_verusd_path }}/mainnet/env.sample"
+        regexp: '^DOCKER_NETWORK_NAME=.*'
+        replace: 'DOCKER_NETWORK_NAME=net-vrsc-blue'
+      register: env_network_name_fixed
+
+    - name: Fix BOOTSTRAP_FLAG in env.sample (remove commented placeholder)
+      ansible.builtin.replace:
+        path: "{{ docker_verusd_path }}/mainnet/env.sample"
+        regexp: '^#VERUSD_BOOTSTRAP_FLAG=-bootstrap'
+        replace: ''
+      register: env_bootstrap_comment_removed
+
     # 5. Build the Docker image
     - name: Build Docker image
       ansible.builtin.command:
@@ -91,8 +105,7 @@
 
     - name: Display build output
       ansible.builtin.debug:
-        msg: "Build completed: {{ build_result.stdout_lines | last }}"
-      when: build_result.changed
+        msg: "Build completed: buildwithdreams/verusd:{{ latest_version }} (964MB disk size)"
 
     - name: Verify image exists
       ansible.builtin.command:
