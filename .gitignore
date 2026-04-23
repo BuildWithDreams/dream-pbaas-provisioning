@@ -5,3 +5,4 @@ inventory-local.ini
 *.local.*
 secrets/
 repos/docker-verusd
+__pycache__/

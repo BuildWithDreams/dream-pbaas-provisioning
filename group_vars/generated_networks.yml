@@ -1,0 +1,16 @@
+verus_networks:
+  - name: net-vrsc-blue
+    subnet: 10.201.0.0/24
+    bridge_suffix: SP1020101
+  - name: net-varrr-blue
+    subnet: 10.202.0.0/24
+    bridge_suffix: SP1020201
+  - name: net-vdex-blue
+    subnet: 10.203.0.0/24
+    bridge_suffix: SP1020301
+  - name: net-chips-blue
+    subnet: 10.204.0.0/24
+    bridge_suffix: SP1020401
+  - name: dev199
+    subnet: 
+    bridge_suffix:

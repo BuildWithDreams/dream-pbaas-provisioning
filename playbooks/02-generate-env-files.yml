@@ -1,0 +1,46 @@
+# Playbook: 02-generate-env-files.yml
+# Purpose: Generate .env.{network} files from env.sample sources in docker-verusd repo.
+#          Also generates group_vars/generated_networks.yml for downstream playbooks.
+# Run with: ansible-playbook -i inventory.ini playbooks/02-generate-env-files.yml
+# Must run before 03-docker-networks.yml
+---
+- name: Generate network config files from env.samples
+  hosts: production
+  become: false
+  gather_facts: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    infra_path: "/home/{{ ansible_user }}/docker-verusd/infrastructure"
+
+  tasks:
+    - name: Ensure infrastructure directory exists on remote
+      ansible.builtin.file:
+        path: "{{ infra_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Run config generator on remote
+      ansible.builtin.script:
+        cmd: scripts/generate_net_configs.py {{ docker_verusd_path }} {{ infra_path }}
+      register: gen_output
+      changed_when: true
+
+    - name: Display generated config summary
+      ansible.builtin.debug:
+        msg: "{{ gen_output.stdout_lines }}"
+
+    - name: Fetch generated YAML from remote
+      ansible.builtin.fetch:
+        src: "{{ infra_path }}/.env.verus_networks.yml"
+        dest: "/tmp/fetched_networks.yml"
+        flat: true
+      failed_when: false
+
+    - name: Write group_vars/generated_networks.yml on controller
+      ansible.builtin.copy:
+        content: "{{ lookup('file', '/tmp/fetched_networks.yml') }}"
+        dest: /home/mylo/provisioning/group_vars/generated_networks.yml
+        mode: '0644'
+      delegate_to: localhost
+      run_once: true
+      when: lookup('file', '/tmp/fetched_networks.yml', errors='ignore') != ''
