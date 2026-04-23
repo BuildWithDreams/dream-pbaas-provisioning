@@ -4,3 +4,4 @@ inventory-local.ini
 .env
 *.local.*
 secrets/
+repos/docker-verusd
