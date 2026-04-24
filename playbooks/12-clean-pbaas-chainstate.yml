@@ -1,0 +1,155 @@
+# Playbook: 12-clean-pbaas-chainstate.yml
+# Purpose: Safely clear only the corrupted chainstate and blocks directories
+#          on a PBaaS chain, preserving wallet.dat and the config file.
+#
+# ⚠️  NEVER delete the entire data_dir. Wallet and config must be preserved.
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/12-clean-pbaas-chainstate.yml -e pbaas_chain=varrr
+#
+# Required vars:
+#   pbaas_chain   — chain name: varrr, vdex, or chips
+
+---
+- name: Clean PBaaS chain chainstate (preserve wallet + config)
+  hosts: production
+  become: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    pbaas_chain_info:
+      varrr:
+        subdir: pbaas/varrr
+        hex: e9e10955b7d16031e3d6f55d9c908a038e3ae47d
+      vdex:
+        subdir: pbaas/vdex
+        hex: 53fe39eea8c06bba32f1a4e20db67e5524f0309d
+      chips:
+        subdir: pbaas/chips
+        hex: f315367528394674d45277e369629605a1c3ce9f
+
+  tasks:
+    - name: Validate pbaas_chain is known
+      ansible.builtin.assert:
+        that:
+          - pbaas_chain in pbaas_chain_info
+        fail_msg: "Unknown pbaas_chain: '{{ pbaas_chain }}'. Must be one of: varrr, vdex, chips."
+        success_msg: "pbaas_chain '{{ pbaas_chain }}' validated"
+
+    - name: Set chain paths
+      ansible.builtin.set_fact:
+        chain_subdir: "{{ pbaas_chain_info[pbaas_chain].subdir }}"
+        currencyid_hex: "{{ pbaas_chain_info[pbaas_chain].hex }}"
+
+    - name: Derive data_dir path
+      ansible.builtin.set_fact:
+        data_dir: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir"
+
+    - name: Check data_dir exists
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: data_dir_stat
+
+    - name: Fail if data_dir does not exist
+      ansible.builtin.fail:
+        msg: "data_dir not found at {{ data_dir }}. Nothing to clean."
+      when: not data_dir_stat.stat.exists
+
+    - name: List contents of data_dir before changes
+      ansible.builtin.shell:
+        cmd: "ls -la \"{{ data_dir }}\""
+      register: data_dir_contents
+      changed_when: false
+
+    - name: Display data_dir contents
+      ansible.builtin.debug:
+        msg: |
+          Contents of {{ data_dir }}:
+          {{ data_dir_contents.stdout }}
+
+    - name: Identify chainstate and blocks directories
+      ansible.builtin.shell:
+        cmd: "ls \"{{ data_dir }}\" | grep -E '^(chainstate|blocks|database)$'"
+      register: corrupt_dirs
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if no corrupt directories found
+      ansible.builtin.fail:
+        msg: |
+          No chainstate/blocks/database directories found in {{ data_dir }}.
+          Nothing to clean. Aborting to protect existing data.
+      when: corrupt_dirs.stdout | trim == ""
+
+    - name: Display what will be deleted
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  The following directories will be DELETED (chainstate/blocks/database):
+          {{ corrupt_dirs.stdout_lines | map('regex_replace', '.*', data_dir + '/&') | join('\n') }}
+
+    - name: Display what will be PRESERVED
+      ansible.builtin.debug:
+        msg: |
+          ✅ The following will be PRESERVED (wallet, config, lock, etc.):
+          {{ (data_dir_contents.stdout_lines | map('trim') | map('regex_replace', '.* ', '') | reject('in', corrupt_dirs.stdout)) | list | join('\n') }}
+
+    - name: Confirm playbook is targeting correct chain
+      ansible.builtin.pause:
+        prompt: |
+          ⚠️  Waiting for confirmation to delete chainstate/blocks on '{{ pbaas_chain }}'.
+          This playbook is safe — it only deletes chainstate/, blocks/, and database/ directories.
+          All other files (wallet.dat, *.conf, .lock, wallets/) are preserved.
+          Press Ctrl+C to abort, or Enter to continue...
+      register: pause_result
+      when: false  # disabled for automation; enable interactively
+
+    - name: Stop container before cleaning chainstate
+      ansible.builtin.shell:
+        cmd: "docker stop -t 60 varrr_blue-varrr-1 2>/dev/null || docker stop -t 60 {{ pbaas_chain }}_blue-{{ pbaas_chain }}-1 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+      register: container_stop
+
+    - name: Verify container is stopped
+      ansible.builtin.shell:
+        cmd: !unsafe "docker ps --format '{{.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1' | wc -l | tr -d ' '"
+      register: container_check
+      changed_when: false
+      failed_when: false
+
+    - name: Delete chainstate directory
+      ansible.builtin.file:
+        path: "{{ data_dir }}/chainstate"
+        state: absent
+      register: chainstate_delete
+
+    - name: Delete blocks directory
+      ansible.builtin.file:
+        path: "{{ data_dir }}/blocks"
+        state: absent
+      register: blocks_delete
+
+    - name: Delete database directory
+      ansible.builtin.file:
+        path: "{{ data_dir }}/database"
+        state: absent
+      register: database_delete
+      failed_when: false
+
+    - name: Display cleanup summary
+      ansible.builtin.debug:
+        msg: |
+          Cleanup complete:
+          {% if chainstate_delete.changed %}  - Deleted chainstate/{% else %}  - chainstate/ already absent{% endif %}
+          {% if blocks_delete.changed %}  - Deleted blocks/{% else %}  - blocks/ already absent{% endif %}
+          {% if database_delete.changed %}  - Deleted database/{% else %}  - database/ already absent{% endif %}
+
+    - name: List remaining files after cleanup
+      ansible.builtin.shell:
+        cmd: "ls -la \"{{ data_dir }}\""
+      register: data_dir_after
+      changed_when: false
+
+    - name: Display preserved files
+      ansible.builtin.debug:
+        msg: |
+          ✅ Remaining files (all preserved):
+          {{ data_dir_after.stdout }}
