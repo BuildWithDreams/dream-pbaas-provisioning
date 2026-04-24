@@ -77,8 +77,8 @@
     - name: Derive data_dir and conf file path
       ansible.builtin.set_fact:
         docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
-        data_dir: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir"
-        conf_file: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
+        data_dir: "/home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/data_dir"
+        conf_file: "/home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
 
     - name: Check conf file exists
       ansible.builtin.stat:
@@ -107,13 +107,13 @@
           Existing connect/whitelist/addnode lines in {{ conf_file }}:
           {{ conf_content.splitlines() | select('search', '^(connect|whitelist|addnode)=') | list | join('\n') or '(none)' }}
 
-    - name: Add connect= and whitelist= for each peer (idempotent)
+    - name: Add connect= for each peer (idempotent)
       ansible.builtin.lineinfile:
         path: "{{ conf_file }}"
-        line: "{{ item[0] }}={{ item[1].host }}:{{ item[1].port }}"
-        regexp: "^{{ item[0] }}={{ item[1].host }}:{{ item[1].port }}$"
+        line: "connect={{ item.host }}"
+        regexp: "^connect={{ item.host }}$"
         state: present
-      loop: "{{ ['connect', 'whitelist'] | product(peers) | list }}"
+      loop: "{{ peers }}"
       register: peer_lines
 
     - name: Display changes made
@@ -142,7 +142,7 @@
     - name: Restart container to pick up new peer config
       ansible.builtin.shell:
         cmd: >
-          docker compose -p {{ pbaas_chain }}_blue -f {{ docker_verusd_path }}/{{ chain_subdir }}/docker-compose.yaml restart
+          docker compose -p {{ pbaas_chain }}_blue -f /home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/docker-compose.yaml restart
       register: restart_result
       changed_when: "'Restarting' in restart_result.stdout or 'Restarted' in restart_result.stdout"
 
