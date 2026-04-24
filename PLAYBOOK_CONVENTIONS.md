@@ -83,11 +83,50 @@ Examples: `net-vrsc-blue`, `net-vrsc-green`, `net-vdex-blue`, `net-varrr-blue`
 
 ## Data Directory Reference
 
-| Chain | Data dir inside container |
-|-------|-------------------------|
-| VRSC | `/root/.komodo/VRSC` |
-| vRSCTEST | `/root/.komodo/vrsctest` |
-| PBaaS (vDEX, varrr, chips) | `/root/.verus/pbaas/<currency_hex_id>` |
+| Chain | Data dir inside container | Config path inside container | `CURRENCYID_HEX` env var | Notes |
+|-------|-------------------------|------------------------------|-------------------------|-------|
+| VRSC | `/root/.komodo/VRSC` | `/root/.komodo/VRSC/VRSC.conf` | *(not used)* | Non-PBaaS, flat structure |
+| vRSCTEST | `/root/.komodo/vrsctest` | `/root/.komodo/vrsctest/vrsctest.conf` | *(not used)* | Non-PBaaS, flat structure |
+| vARRR | `/root/.verus/pbaas/<hex>` | `/root/.verus/pbaas/<hex>/<hex>.conf` | `e9e10955b7d16031e3d6f55d9c908a038e3ae47d` | PBaaS nested structure |
+| vDEX | `/root/.verus/pbaas/<hex>` | `/root/.verus/pbaas/<hex>/<hex>.conf` | `53fe39eea8c06bba32f1a4e20db67e5524f0309d` | PBaaS nested structure |
+| CHIPS | `/root/.verus/pbaas/<hex>` | `/root/.verus/pbaas/<hex>/<hex>.conf` | `f315367528394674d45277e369629605a1c3ce9f` | PBaaS nested structure |
+
+> **PBaaS chains** use a nested data dir: `/root/.verus/pbaas/<currencyidhex>/<currencyidhex>.conf`
+> The hex ID is also set as `CURRENCYID_HEX` in the chain's `.env` file.
+> On the host, compose mounts `./data_dir:/root/.verus/pbaas/${CURRENCYID_HEX}` so the host-side config is `<chain_dir>/data_dir/<hex>.conf`.
+
+### PBaaS Currency ID Discovery Procedure
+
+When a new PBaaS chain needs to be provisioned and its hex ID is unknown:
+
+```bash
+# Step 1: Query the VRSC main chain (container must be running)
+ssh bwd "docker exec mains_blue-vrsc-1 verus getcurrency <lowercase_name> 2>&1"
+
+# Step 2: Extract currencyidhex from the JSON response
+ssh bwd "docker exec mains_blue-vrsc-1 verus getcurrency <name> 2>&1" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['currencyidhex'])"
+
+# Example — get vARRR hex ID:
+ssh bwd "docker exec mains_blue-vrsc-1 verus getcurrency varrr 2>&1" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['currencyidhex'])"
+# Output: e9e10955b7d16031e3d6f55d9c908a038e3ae47d
+```
+
+The `currencyidhex` field is the raw hex chain ID. It is used for:
+1. `CURRENCYID_HEX` in the chain's `.env` file
+2. The nested directory and config filename inside the container
+3. The host-side config file path via the volume mount
+
+Known IDs (confirmed on BWD):
+
+| Chain | `getcurrency` arg | `currencyidhex` |
+|-------|------------------|----------------|
+| vARRR | `varrr` | `e9e10955b7d16031e3d6f55d9c908a038e3ae47d` |
+| vDEX | `vdex` | `53fe39eea8c06bba32f1a4e20db67e5524f0309d` |
+| CHIPS | `chips` | `f315367528394674d45277e369629605a1c3ce9f` |
+
+> **Note:** Use lowercase chain names in the RPC call (`varrr`, `vdex`, `chips`).
 
 ---
 
