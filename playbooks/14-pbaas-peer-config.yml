@@ -50,8 +50,9 @@
         subdir: pbaas/chips
         hex: f315367528394674d45277e369629605a1c3ce9f
 
-    # Use provided peers list or fall back to defaults for the chain
-    peers: "{{ pbaas_default_peers[pbaas_chain] | default([]) }}"
+    # Default is an empty list. -e peers=[...] overrides this. Jinja2 |list filter
+    # converts a JSON-string to a Python list; if already a list it's a no-op.
+    peers: "{{ (pbaas_default_peers[pbaas_chain] | default('[]')) | from_json }}"
 
   tasks:
     - name: Clone or update provisioning repo
@@ -81,9 +82,10 @@
       ansible.builtin.assert:
         that:
           - peers | length > 0
-        fail_msg: >
-          No peers provided and no defaults defined for '{{ pbaas_chain }}'.
-          Provide peers via -e "peers=[{host: ..., port: ...}]".
+        fail_msg: >-
+          No peers provided. Provide via:
+          -e "peers=[{host: '142.44.215.100', port: 20777}, ...]"
+          Or set pbaas_default_peers.{{ pbaas_chain }} in the playbook vars.
 
     - name: Set chain paths
       ansible.builtin.set_fact:
@@ -129,7 +131,7 @@
         line: "connect={{ item.host }}"
         regexp: "^connect={{ item.host }}$"
         state: present
-      loop: "{{ peers if peers is string else peers }}"
+      loop: "{{ peers }}"
       register: peer_lines
 
     - name: Display changes made
