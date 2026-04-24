@@ -24,7 +24,7 @@
 
     - name: Display raw response
       ansible.builtin.debug:
-        msg: "{{ getinfo_result.stdout }}"
+        msg: "{{ getinfo_result.stdout | to_json if getinfo_result.stdout is mapping else getinfo_result.stdout }}"
 
     # ── 3. Parse and display key fields ────────────────────────────────────────
     - name: Parse getinfo JSON
