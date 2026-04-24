@@ -44,14 +44,13 @@
     - name: Wait for daemon to be ready
       ansible.builtin.shell:
         cmd: "docker exec {{ running_container.stdout }} verus getinfo 2>&1"
-      register: getinfo_result
+      register: daemon_ready
       changed_when: false
       failed_when: false
-      until: "'Loading block index' not in getinfo_result.stdout and getinfo_result.rc == 0"
+      until: "'Loading block index' not in daemon_ready.stdout and daemon_ready.rc == 0"
       retries: "{{ (startup_wait_seconds / startup_poll_seconds) | int }}"
       delay: "{{ startup_poll_seconds }}"
       when: running_container.stdout | length > 0
-      register: daemon_ready
 
     - name: Check if daemon is still loading
       ansible.builtin.debug:
