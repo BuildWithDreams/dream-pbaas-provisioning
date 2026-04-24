@@ -1,24 +1,21 @@
 # Playbook: 14-pbaas-peer-config.yml
-# Purpose: Add explicit peer connect + whitelist entries to a PBaaS chain's .conf file.
+# Purpose: Add explicit peer connect entries to a PBaaS chain's .conf file.
 #          Idempotent — only adds peers that are not already configured.
 #
-# Closes: BuildWithDreams/dream-pbaas-provisioning#11
+# ⚠️  Run from the CONTROL NODE — this playbook manages the remote BWD node.
+#    The provisioning repo lives on the control node, NOT on the remote.
 #
 # Run with:
 #   ansible-playbook -i inventory.ini playbooks/14-pbaas-peer-config.yml \
-#     -e pbaas_chain=varrr
-#
-#   # With custom peers
-#   ansible-playbook -i inventory.ini playbooks/14-pbaas-peer-config.yml \
 #     -e pbaas_chain=varrr \
-#     -e "peers=[{host: '198.244.188.47', port: 20777}]"
+#     -e "peers=[{host: '142.44.215.100', port: 20777}, {host: '162.55.5.83', port: 20777}]"
 #
 # Required vars:
 #   pbaas_chain  — chain name: varrr, vdex, or chips
 #
 # Optional vars:
 #   peers        — list of {host, port} dicts.
-#                   Defaults to chain-specific seed nodes (see pbaas_default_peers below).
+#                   Must be provided via -e "peers=[...]"
 
 ---
 - name: Configure PBaaS chain peer connections
@@ -26,19 +23,6 @@
   become: false
 
   vars:
-    # Per-chain defaults. These are publicly known seed nodes and are safe to include.
-    pbaas_default_peers:
-      varrr:
-        - { host: "198.244.188.47", port: 20777 }
-        - { host: "89.117.149.133", port: 20777 }
-        - { host: "217.15.160.231",  port: 20777 }
-      vdex:
-        - { host: "89.117.149.133", port: 21778 }
-        - { host: "217.15.160.231",  port: 21778 }
-      chips:
-        - { host: "89.117.149.133", port: 22777 }
-        - { host: "217.15.160.231",  port: 22777 }
-
     pbaas_chain_info:
       varrr:
         subdir: pbaas/varrr
@@ -50,27 +34,7 @@
         subdir: pbaas/chips
         hex: f315367528394674d45277e369629605a1c3ce9f
 
-    # Default is an empty list. -e peers=[...] overrides this. Jinja2 |list filter
-    # converts a JSON-string to a Python list; if already a list it's a no-op.
-    peers: "{{ (pbaas_default_peers[pbaas_chain] | default('[]')) | from_json }}"
-
   tasks:
-    - name: Clone or update provisioning repo
-      ansible.builtin.shell:
-        cmd: |
-          if [ -d /home/{{ ansible_user }}/provisioning/.git ]; then
-            git -C /home/{{ ansible_user }}/provisioning pull --ff origin main
-          else
-            git clone https://github.com/BuildWithDreams/dream-pbaas-provisioning.git /tmp/provisioning_tmp
-            mkdir -p /home/{{ ansible_user }}/provisioning
-            cp -r /tmp/provisioning_tmp/playbooks /home/{{ ansible_user }}/provisioning/
-            cp /tmp/provisioning_tmp/group_vars/production.yml /home/{{ ansible_user }}/provisioning/group_vars/ 2>/dev/null || true
-            cp /tmp/provisioning_tmp/inventory.ini /home/{{ ansible_user }}/provisioning/ 2>/dev/null || true
-            rm -rf /tmp/provisioning_tmp
-          fi
-      register: git_sync
-      changed_when: "'Cloning' in git_sync.stdout or 'Updating' in git_sync.stdout"
-
     - name: Validate pbaas_chain is known
       ansible.builtin.assert:
         that:
@@ -85,16 +49,11 @@
         fail_msg: >-
           No peers provided. Provide via:
           -e "peers=[{host: '142.44.215.100', port: 20777}, ...]"
-          Or set pbaas_default_peers.{{ pbaas_chain }} in the playbook vars.
 
     - name: Set chain paths
       ansible.builtin.set_fact:
         chain_subdir: "{{ pbaas_chain_info[pbaas_chain].subdir }}"
         currencyid_hex: "{{ pbaas_chain_info[pbaas_chain].hex }}"
-
-    - name: Derive data_dir and conf file path
-      ansible.builtin.set_fact:
-        docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
         data_dir: "/home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/data_dir"
         conf_file: "/home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
 
@@ -108,7 +67,6 @@
         msg: |
           Conf file not found: {{ conf_file }}
           Run playbook 11-setup-pbaas.yml first to generate the chain config.
-      when: not conf_stat.stat.exists
 
     - name: Read current conf file contents
       ansible.builtin.slurp:
@@ -146,21 +104,9 @@
           {%   endif %}
           {% endfor %}
 
-    - name: Verify final conf file
-      ansible.builtin.slurp:
-        src: "{{ conf_file }}"
-      register: final_conf_b64
-
-    - name: Display final peer section
-      ansible.builtin.debug:
-        msg: |
-          Final peer entries in {{ conf_file }}:
-          {{ final_conf_b64.content | b64decode | splitlines | select('search', '^(connect|whitelist|addnode)=') | list | join('\n') or '(none)' }}
-
     - name: Restart container to pick up new peer config
       ansible.builtin.shell:
-        cmd: >
-          docker compose -p {{ pbaas_chain }}_blue -f /home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/docker-compose.yaml restart
+        cmd: !unsafe "docker compose -p {{ pbaas_chain }}_blue -f /home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/docker-compose.yaml restart"
       register: restart_result
       changed_when: "'Restarting' in restart_result.stdout or 'Restarted' in restart_result.stdout"
 
