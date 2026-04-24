@@ -60,7 +60,12 @@
           if [ -d /home/{{ ansible_user }}/provisioning/.git ]; then
             git -C /home/{{ ansible_user }}/provisioning pull --ff origin main
           else
-            git clone https://github.com/BuildWithDreams/dream-pbaas-provisioning.git /home/{{ ansible_user }}/provisioning
+            git clone https://github.com/BuildWithDreams/dream-pbaas-provisioning.git /tmp/provisioning_tmp
+            mkdir -p /home/{{ ansible_user }}/provisioning
+            cp -r /tmp/provisioning_tmp/playbooks /home/{{ ansible_user }}/provisioning/
+            cp /tmp/provisioning_tmp/group_vars/production.yml /home/{{ ansible_user }}/provisioning/group_vars/ 2>/dev/null || true
+            cp /tmp/provisioning_tmp/inventory.ini /home/{{ ansible_user }}/provisioning/ 2>/dev/null || true
+            rm -rf /tmp/provisioning_tmp
           fi
       register: git_sync
       changed_when: "'Cloning' in git_sync.stdout or 'Updating' in git_sync.stdout"
@@ -124,7 +129,7 @@
         line: "connect={{ item.host }}"
         regexp: "^connect={{ item.host }}$"
         state: present
-      loop: "{{ peers | from_json }}"
+      loop: "{{ peers if peers is string else peers }}"
       register: peer_lines
 
     - name: Display changes made
