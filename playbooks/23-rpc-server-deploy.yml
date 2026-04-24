@@ -73,12 +73,6 @@
                 options:
                   max-size: "10m"
                   max-file: "3"
-              healthcheck:
-                test: ["CMD", "curl", "-s", "-f", "http://localhost:{{ rpc_bind_port }}/api/getinfo"]
-                interval: 15s
-                timeout: 10s
-                retries: 5
-                start_period: 10s
 
           networks:
             pbaas_network:
@@ -97,7 +91,7 @@
     # ── 4. Deploy with docker compose ──────────────────────────────────────────
     - name: Start RPC server container
       ansible.builtin.shell:
-        cmd: "timeout 120 docker compose -p {{ compose_project }} up -d"
+        cmd: "timeout 120 docker compose -f {{ compose_file }} -p {{ compose_project }} up -d"
       register: compose_up
       changed_when: true
 
