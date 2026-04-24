@@ -17,7 +17,6 @@
     - name: Curl getinfo
       ansible.builtin.shell:
         cmd: "curl -s -f -X POST '{{ rpc_url }}' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getinfo\",\"params\":[]}'"
-        timeout: 15
       register: getinfo_result
       changed_when: false
       failed_when: false
