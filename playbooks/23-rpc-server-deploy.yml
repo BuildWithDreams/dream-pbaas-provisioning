@@ -30,24 +30,11 @@
       failed_when: image_check.stdout != 'ok'
 
     # ── 2. Stop existing container if running ─────────────────────────────────
-    - name: Check for running container
+    - name: Remove old container if it exists
       ansible.builtin.shell:
-        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || true"
-      register: running_check
-      changed_when: false
-
-    - name: Stop existing container
-      ansible.builtin.shell:
-        cmd: "docker stop -t 10 {{ container_name }} && docker rm {{ container_name }}"
-      register: stop_result
-      changed_when: running_check.stdout | length > 0
+        cmd: "docker rm -f {{ container_name }} 2>/dev/null || true"
+      changed_when: true
       failed_when: false
-      when: running_check.stdout | length > 0
-
-    - name: Display stop result
-      ansible.builtin.debug:
-        msg: "Stopped: {{ stop_result.stdout }}"
-      when: running_check.stdout | length > 0
 
     # ── 3. Write docker-compose.yml ────────────────────────────────────────────
     - name: Create docker-compose.yml
@@ -91,7 +78,7 @@
     # ── 4. Deploy with docker compose ──────────────────────────────────────────
     - name: Start RPC server container
       ansible.builtin.shell:
-        cmd: "timeout 120 docker compose -f {{ compose_file }} -p {{ compose_project }} up -d"
+        cmd: "timeout 120 docker compose -f {{ compose_file }} -p {{ compose_project }} up -d --force-recreate"
       register: compose_up
       changed_when: true
 
