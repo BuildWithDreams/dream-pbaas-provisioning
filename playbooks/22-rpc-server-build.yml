@@ -38,7 +38,7 @@
     # ── 3. Build Docker image ─────────────────────────────────────────────────
     - name: Build Docker image
       ansible.builtin.shell:
-        cmd: "cd {{ rpc_server_path }} && docker build -t {{ image_name }}:local -t {{ image_name }}:latest ."
+        cmd: "touch {{ rpc_server_path }}/Conf.toml && cd {{ rpc_server_path }} && docker build --no-cache -t {{ image_name }}:local -t {{ image_name }}:latest ."
       register: build_result
       when: rebuild or image_exists.stdout != 'exists'
 
