@@ -1,0 +1,169 @@
+# Playbook: 17-add-pbaas-rpc-allowip.yml
+# Purpose: Add rpcallowip entry for a PBaaS chain's Docker network subnet to its .conf.
+#          Idempotent — safe to run multiple times; only adds if not already present.
+#
+# ⚠️  Run AFTER shutting down the PBaaS chain (playbook 14-shutdown-pbaas.yml) so
+#     config is not locked. The daemon must be restarted after config changes.
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/17-add-pbaas-rpc-allowip.yml -e pbaas_chain=vdex
+#
+# Required vars:
+#   pbaas_chain   — chain name: varrr, vdex, or chips
+#
+# What it does:
+#   1. Validates pbaas_chain is one of the known chains
+#   2. Detects the Docker network subnet from the chain's .env (DOCKER_NETWORK_NAME)
+#   3. Builds rpcallowip=<subnet> entry (e.g. rpcallowip=10.203.0.0/24)
+#   4. Appends to <hex>.conf only if not already present (lineinfile, idempotent)
+#   5. Confirms what was added / already existed
+
+---
+- name: Add PBaaS chain rpcallowip for Docker network
+  hosts: production
+  become: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    pbaas_chain_info:
+      varrr:
+        subdir: pbaas/varrr
+        hex: e9e10955b7d16031e3d6f55d9c908a038e3ae47d
+      vdex:
+        subdir: pbaas/vdex
+        hex: 53fe39eea8c06bba32f1a4e20db67e5524f0309d
+      chips:
+        subdir: pbaas/chips
+        hex: f315367528394674d45277e369629605a1c3ce9f
+
+  tasks:
+    # 1. Validate pbaas_chain
+    - name: Validate pbaas_chain is known
+      ansible.builtin.assert:
+        that:
+          - pbaas_chain in pbaas_chain_info
+        fail_msg: "Unknown pbaas_chain: '{{ pbaas_chain }}'. Must be one of: varrr, vdex, chips."
+        success_msg: "pbaas_chain '{{ pbaas_chain }}' validated"
+
+    # 2. Derive paths
+    - name: Set chain paths
+      ansible.builtin.set_fact:
+        chain_subdir: "{{ pbaas_chain_info[pbaas_chain].subdir }}"
+        currencyid_hex: "{{ pbaas_chain_info[pbaas_chain].hex }}"
+        chain_path: "{{ docker_verusd_path }}/{{ chain_subdir }}"
+
+    - name: Set PBaaS conf file path
+      ansible.builtin.set_fact:
+        conf_file: "{{ chain_path }}/data_dir/{{ currencyid_hex }}.conf"
+
+    - name: Display chain configuration
+      ansible.builtin.debug:
+        msg: |
+          Chain: {{ pbaas_chain }}
+          Currency hex: {{ currencyid_hex }}
+          Conf file: {{ conf_file }}
+
+    # 3. Read chain .env to get Docker network name
+    - name: Read chain .env
+      ansible.builtin.command:
+        cmd: "cat {{ chain_path }}/.env"
+      register: chain_env
+      changed_when: false
+      failed_when: false
+
+    - name: Extract Docker network name
+      ansible.builtin.set_fact:
+        docker_network_name: "{{ chain_env.stdout | regex_search('DOCKER_NETWORK_NAME=(\\S+)', '\\1') | first }}"
+
+    - name: Display Docker network
+      ansible.builtin.debug:
+        msg: "Docker network: {{ docker_network_name }}"
+
+    # 4. Inspect Docker network to get subnet
+    - name: Inspect Docker network subnet
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ docker_network_name }} | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d[0]['IPAM']['Config'][0]['Subnet'])\""
+      register: network_subnet_raw
+      changed_when: false
+
+    - name: Display detected subnet
+      ansible.builtin.debug:
+        msg: "{{ docker_network_name }} subnet: {{ network_subnet_raw.stdout }}"
+
+    - name: Fail if network not found
+      ansible.builtin.fail:
+        msg: "Network '{{ docker_network_name }}' not found. Run playbooks 02-generate-env-files.yml and 03-docker-networks.yml first."
+      when: network_subnet_raw.stdout | length == 0
+
+    # 5. Build rpcallowip line
+    - name: Derive rpcallowip line value
+      ansible.builtin.set_fact:
+        rpcallowip_subnet: "{{ network_subnet_raw.stdout | regex_replace('/\\d+$', '') }}"
+        rpcallowip_line: "rpcallowip={{ network_subnet_raw.stdout | regex_replace('/\\d+$', '') }}/{{ network_subnet_raw.stdout | regex_replace('.*/', '') }}"
+
+    - name: Display rpcallowip entry
+      ansible.builtin.debug:
+        msg: "Will add: {{ rpcallowip_line }}"
+
+    # 6. Check conf file exists
+    - name: Check PBaaS conf file exists
+      ansible.builtin.shell:
+        cmd: "test -f {{ conf_file }} && echo present || echo missing"
+      register: conf_check
+      changed_when: false
+
+    - name: Fail if conf file missing
+      ansible.builtin.fail:
+        msg: |
+          Conf file not found: {{ conf_file }}
+          Run playbook 11-setup-pbaas.yml first to create the chain config.
+      when: conf_check.stdout != "present"
+
+    # 7. Read current conf to check if rpcallowip already present
+    - name: Read current conf
+      ansible.builtin.slurp:
+        src: "{{ conf_file }}"
+      register: conf_b64
+
+    - name: Decode conf
+      ansible.builtin.set_fact:
+        conf_content: "{{ conf_b64.content | b64decode }}"
+
+    - name: Show existing rpcallowip entries
+      ansible.builtin.debug:
+        msg: |
+          Existing rpcallowip lines in {{ conf_file }}:
+          {{ conf_content.splitlines() | select('search', '^rpcallowip=') | list | join('\n') or '(none)' }}
+
+    # 8. Add rpcallowip for Docker network subnet (idempotent)
+    - name: Add rpcallowip subnet entry
+      ansible.builtin.lineinfile:
+        path: "{{ conf_file }}"
+        line: "{{ rpcallowip_line }}"
+        regexp: "^rpcallowip={{ rpcallowip_subnet }}/"
+        state: present
+      register: rpc_line_added
+
+    - name: Confirm change
+      ansible.builtin.debug:
+        msg: "{{ '✅ Added rpcallowip entry to {{ pbaas_chain }}.conf' if rpc_line_added.changed else 'ℹ️  rpcallowip entry already present — no change made' }}"
+
+    # 9. Read back and confirm final state
+    - name: Read updated conf
+      ansible.builtin.slurp:
+        src: "{{ conf_file }}"
+      register: updated_conf_b64
+
+    - name: Decode updated conf
+      ansible.builtin.set_fact:
+        updated_conf: "{{ updated_conf_b64.content | b64decode }}"
+
+    - name: Show final rpcallowip block
+      ansible.builtin.debug:
+        msg: |
+          Final rpcallowip entries in {{ conf_file }}:
+          {{ updated_conf.splitlines() | select('search', '^rpcallowip=') | list | join('\n') }}
+
+    - name: Next step reminder
+      ansible.builtin.debug:
+        msg: |
+          ✅ RPC allowip configured for {{ pbaas_chain }} Docker network {{ network_subnet_raw.stdout }}
+          Next: run playbook 13-start-pbaas.yml to start {{ pbaas_chain }} with the updated config.

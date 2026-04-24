@@ -1,0 +1,278 @@
+# Playbook: 18-wait-verify-sync.yml
+# Purpose: Wait for the daemons to sync after a restart, then verify sync status.
+#          Designed for use after starting VRSC and PBaaS chains following config changes.
+#
+# Run with:
+#   ansible-playbook -i inventory.ini playbooks/18-wait-verify-sync.yml
+#   ansible-playbook -i inventory.ini playbooks/18-wait-verify-sync.yml -e wait_minutes=15
+#
+# Optional vars:
+#   wait_minutes  — how long to wait before checking (default: 10)
+#
+# What it does:
+#   1. Announce expected sync duration
+#   2. Wait the specified number of minutes (with countdown)
+#   3. Query getinfo from both VRSC and vDEX containers
+#   4. Report block heights, tip heights, sync gap, and peer count
+#   5. Determine sync status (synced / syncing / offline)
+
+---
+- name: Wait and verify VRSC + vDEX sync status
+  hosts: production
+  become: false
+  vars:
+    # Default wait time in minutes — increase if syncing from scratch
+    wait_minutes: 10
+
+  tasks:
+    # 1. Pre-flight: verify both containers are running
+    - name: Check VRSC container running
+      ansible.builtin.shell:
+        cmd: "docker ps --filter name=mains_blue-vrsc-1 --format '{{.Names}}' 2>/dev/null | grep -q . && echo running || echo stopped"
+      register: vrsc_container_check
+      changed_when: false
+      failed_when: false
+
+    - name: Check vDEX container running
+      ansible.builtin.shell:
+        cmd: "docker ps --filter name=mains_blue-vdex-1 --format '{{.Names}}' 2>/dev/null | grep -q . && echo running || echo stopped"
+      register: vdex_container_check
+      changed_when: false
+      failed_when: false
+
+    - name: Pre-flight container status
+      ansible.builtin.debug:
+        msg: |
+          Pre-flight check:
+            VRSC container: {{ vrsc_container_check.stdout }}
+            vDEX container: {{ vdex_container_check.stdout }}
+
+    - name: Warn if VRSC not running
+      ansible.builtin.debug:
+        msg: "⚠️  VRSC container is not running — start it first with 08-start-vrsc.yml"
+      when: vrsc_container_check.stdout != "running"
+
+    - name: Warn if vDEX not running
+      ansible.builtin.debug:
+        msg: "⚠️  vDEX container is not running — start it first with 13-start-pbaas.yml"
+      when: vdex_container_check.stdout != "running"
+
+    # 2. Announce wait
+    - name: Announce sync wait
+      ansible.builtin.debug:
+        msg: |
+          =================================================================
+          Waiting {{ wait_minutes }} minute(s) for daemons to sync...
+          Daemons load the block index on startup — this is normal.
+          The wait gives the daemon time to rebuild its UTXO set.
+          =================================================================
+
+    # 3. Wait with periodic status checks every 2 minutes
+    # We do this as a loop of shorter pauses so the user sees progress
+    - name: Wait 2 minutes — status check 1/5
+      ansible.builtin.pause:
+        seconds: 120
+      when: wait_minutes | int >= 2
+
+    - name: Quick VRSC status at 2 min
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vrsc-1 verus getinfo 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('blocks',0), d.get('longestchain',0), d.get('connections',0))\" 2>/dev/null || echo 'offline 0 0'"
+      register: vrsc_2min
+      changed_when: false
+      failed_when: false
+      when: wait_minutes | int >= 2 and vrsc_container_check.stdout == "running"
+
+    - name: Quick vDEX status at 2 min
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vdex-1 verus -chain=vdex getinfo 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('blocks',0), d.get('longestchain',0), d.get('connections',0))\" 2>/dev/null || echo 'offline 0 0'"
+      register: vdex_2min
+      changed_when: false
+      failed_when: false
+      when: wait_minutes | int >= 2 and vdex_container_check.stdout == "running"
+
+    - name: Status at 2 minutes
+      ansible.builtin.debug:
+        msg: "At 2 min — VRSC: {{ vrsc_2min.stdout | default('offline') }} | vDEX: {{ vdex_2min.stdout | default('offline') }}"
+      when: wait_minutes | int >= 2
+
+    - name: Wait 2 more minutes — status check 2/5
+      ansible.builtin.pause:
+        seconds: 120
+      when: wait_minutes | int >= 4
+
+    - name: Quick VRSC status at 4 min
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vrsc-1 verus getinfo 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('blocks',0), d.get('longestchain',0), d.get('connections',0))\" 2>/dev/null || echo 'offline 0 0'"
+      register: vrsc_4min
+      changed_when: false
+      failed_when: false
+      when: wait_minutes | int >= 4 and vrsc_container_check.stdout == "running"
+
+    - name: Quick vDEX status at 4 min
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vdex-1 verus -chain=vdex getinfo 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('blocks',0), d.get('longestchain',0), d.get('connections',0))\" 2>/dev/null || echo 'offline 0 0'"
+      register: vdex_4min
+      changed_when: false
+      failed_when: false
+      when: wait_minutes | int >= 4 and vdex_container_check.stdout == "running"
+
+    - name: Status at 4 minutes
+      ansible.builtin.debug:
+        msg: "At 4 min — VRSC: {{ vrsc_4min.stdout | default('offline') }} | vDEX: {{ vdex_4min.stdout | default('offline') }}"
+      when: wait_minutes | int >= 4
+
+    - name: Wait 2 more minutes — status check 3/5
+      ansible.builtin.pause:
+        seconds: 120
+      when: wait_minutes | int >= 6
+
+    - name: Quick VRSC status at 6 min
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vrsc-1 verus getinfo 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('blocks',0), d.get('longestchain',0), d.get('connections',0))\" 2>/dev/null || echo 'offline 0 0'"
+      register: vrsc_6min
+      changed_when: false
+      failed_when: false
+      when: wait_minutes | int >= 6 and vrsc_container_check.stdout == "running"
+
+    - name: Quick vDEX status at 6 min
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vdex-1 verus -chain=vdex getinfo 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('blocks',0), d.get('longestchain',0), d.get('connections',0))\" 2>/dev/null || echo 'offline 0 0'"
+      register: vdex_6min
+      changed_when: false
+      failed_when: false
+      when: wait_minutes | int >= 6 and vdex_container_check.stdout == "running"
+
+    - name: Status at 6 minutes
+      ansible.builtin.debug:
+        msg: "At 6 min — VRSC: {{ vrsc_6min.stdout | default('offline') }} | vDEX: {{ vdex_6min.stdout | default('offline') }}"
+      when: wait_minutes | int >= 6
+
+    - name: Wait 2 more minutes — status check 4/5
+      ansible.builtin.pause:
+        seconds: 120
+      when: wait_minutes | int >= 8
+
+    - name: Quick VRSC status at 8 min
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vrsc-1 verus getinfo 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('blocks',0), d.get('longestchain',0), d.get('connections',0))\" 2>/dev/null || echo 'offline 0 0'"
+      register: vrsc_8min
+      changed_when: false
+      failed_when: false
+      when: wait_minutes | int >= 8 and vrsc_container_check.stdout == "running"
+
+    - name: Quick vDEX status at 8 min
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vdex-1 verus -chain=vdex getinfo 2>&1 | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d.get('blocks',0), d.get('longestchain',0), d.get('connections',0))\" 2>/dev/null || echo 'offline 0 0'"
+      register: vdex_8min
+      changed_when: false
+      failed_when: false
+      when: wait_minutes | int >= 8 and vdex_container_check.stdout == "running"
+
+    - name: Status at 8 minutes
+      ansible.builtin.debug:
+        msg: "At 8 min — VRSC: {{ vrsc_8min.stdout | default('offline') }} | vDEX: {{ vdex_8min.stdout | default('offline') }}"
+      when: wait_minutes | int >= 8
+
+    # 4. Final wait to reach total wait_minutes (handled by 5 intervals above for up to 10 min)
+    # For wait_minutes > 10, do final wait
+    - name: Final wait to reach {{ wait_minutes }} minutes
+      ansible.builtin.pause:
+        seconds: "{{ ((wait_minutes | int) - 10) * 60 }}"
+      when: (wait_minutes | int) > 10
+
+    # 5. Full getinfo query on both chains
+    - name: Query VRSC full getinfo
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vrsc-1 verus getinfo 2>&1"
+      register: vrsc_info
+      changed_when: false
+      failed_when: false
+
+    - name: Query vDEX full getinfo
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vdex-1 verus -chain=vdex getinfo 2>&1"
+      register: vdex_info
+      changed_when: false
+      failed_when: false
+
+    # 6. Parse VRSC
+    - name: Parse VRSC getinfo
+      ansible.builtin.set_fact:
+        vrsc_blocks: "{{ (vrsc_info.stdout | from_json).blocks if (vrsc_info.stdout is search('blocks')) else 0 }}"
+        vrsc_longest: "{{ (vrsc_info.stdout | from_json).longestchain if (vrsc_info.stdout is search('longestchain')) else 0 }}"
+        vrsc_tlptime: "{{ (vrsc_info.stdout | from_json).tiptime if (vrsc_info.stdout is search('tiptime')) else 0 }}"
+        vrsc_peers: "{{ (vrsc_info.stdout | from_json).connections if (vrsc_info.stdout is search('connections')) else 0 }}"
+        vrsc_tls: "{{ (vrsc_info.stdout | from_json).tls_established if (vrsc_info.stdout is search('tls_established')) else 0 }}"
+        vrsc_online: "{{ vrsc_info.stdout is search('\"blocks\"') }}"
+      when: vrsc_info.stdout is defined
+
+    # 7. Parse vDEX
+    - name: Parse vDEX getinfo
+      ansible.builtin.set_fact:
+        vdex_blocks: "{{ (vdex_info.stdout | from_json).blocks if (vdex_info.stdout is search('blocks')) else 0 }}"
+        vdex_longest: "{{ (vdex_info.stdout | from_json).longestchain if (vdex_info.stdout is search('longestchain')) else 0 }}"
+        vdex_tlptime: "{{ (vdex_info.stdout | from_json).tiptime if (vdex_info.stdout is search('tiptime')) else 0 }}"
+        vdex_peers: "{{ (vdex_info.stdout | from_json).connections if (vdex_info.stdout is search('connections')) else 0 }}"
+        vdex_tls: "{{ (vdex_info.stdout | from_json).tls_established if (vdex_info.stdout is search('tls_established')) else 0 }}"
+        vdex_online: "{{ vdex_info.stdout is search('\"blocks\"') }}"
+      when: vdex_info.stdout is defined
+
+    # 8. Compute gaps
+    - name: Compute sync gaps
+      ansible.builtin.set_fact:
+        vrsc_gap: "{{ (vrsc_longest | int) - (vrsc_blocks | int) }}"
+        vdex_gap: "{{ (vdex_longest | int) - (vdex_blocks | int) }}"
+
+    # 9. Format timestamps
+    - name: Format timestamps
+      ansible.builtin.set_fact:
+        vrsc_tip_str: "{{ '%Y-%m-%d %H:%M:%S' | strftime(vrsc_tlptime | int) if vrsc_tlptime | int > 0 else 'N/A' }}"
+        vdex_tip_str: "{{ '%Y-%m-%d %H:%M:%S' | strftime(vdex_tlptime | int) if vdex_tlptime | int > 0 else 'N/A' }}"
+
+    # 10. Display final report
+    - name: Final sync report
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════════════╗
+          ║          Sync Verification Report — {{ '%-10s' | format(wait_minutes ~ ' min wait') }}║
+          ╠═══════════════╦═══════════════════╦═══════════╦═══════════════════════╣
+          ║ Chain        ║ Local / Tip      ║ Gap       ║ Peers / TLS          ║
+          ╠═══════════════╬═══════════════════╬═══════════╬═══════════════════════╣
+          {% if vrsc_online | bool %}
+          ║ VRSC          ║ {{ '%07d / %07d' | format(vrsc_blocks | int, vrsc_longest | int) }} ║ {{ '%+7d' | format(vrsc_gap | int) }} ║ {{ '%3d' % (vrsc_peers | int) }} / {{ '%2d' % (vrsc_tls | int) }}           ║
+          {% else %}
+          ║ VRSC          ║    offline       ║     —     ║         —            ║
+          {% endif %}
+          {% if vdex_online | bool %}
+          ║ vDEX          ║ {{ '%07d / %07d' | format(vdex_blocks | int, vdex_longest | int) }} ║ {{ '%+7d' | format(vdex_gap | int) }} ║ {{ '%3d' % (vdex_peers | int) }} / {{ '%2d' % (vdex_tls | int) }}           ║
+          {% else %}
+          ║ vDEX          ║    offline       ║     —     ║         —            ║
+          {% endif %}
+          ╚═══════════════╩═══════════════════╩═══════════╩═══════════════════════╝
+          Last VRSC block time: {{ vrsc_tip_str }}
+          Last vDEX block time:  {{ vdex_tip_str }}
+
+    # 11. Sync verdict
+    - name: Sync verdict
+      ansible.builtin.debug:
+        msg: |
+          {% if vrsc_online | bool and vdex_online | bool and vrsc_gap | int <= 2 and vdex_gap | int <= 2 %}
+          ✅ VERDICT: Both chains appear to be in sync (gap ≤ 2 blocks).
+          {% elif vrsc_online | bool and vrsc_gap | int > 2 %}
+          ⚠️  VRSC still syncing (gap {{ vrsc_gap }}). Wait longer and re-run this playbook.
+          {% elif vdex_online | bool and vdex_gap | int > 2 %}
+          ⚠️  vDEX still syncing (gap {{ vdex_gap }}). Wait longer and re-run this playbook.
+          {% else %}
+          ⚠️  One or both chains offline. Check container status with: docker ps
+          {% endif %}
+
+    # 12. Show raw error if chain is offline
+    - name: Show raw error if VRSC offline
+      ansible.builtin.debug:
+        msg: "VRSC error: {{ vrsc_info.stderr | default(vrsc_info.stdout) }}"
+      when: not (vrsc_online | bool)
+
+    - name: Show raw error if vDEX offline
+      ansible.builtin.debug:
+        msg: "vDEX error: {{ vdex_info.stderr | default(vdex_info.stdout) }}"
+      when: not (vdex_online | bool)
