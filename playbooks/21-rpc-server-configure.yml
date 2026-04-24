@@ -2,7 +2,6 @@
 # Purpose: Configure Conf.toml for the Verus RPC server — daemon URL, bind IP,
 #          port, and RPC credentials. Reads existing credentials from VRSC.conf
 #          if present; otherwise generates secure random credentials.
-#          Also ensures VRSC daemon accepts connections from the RPC server subnet.
 # Run with: ansible-playbook -i inventory.ini playbooks/21-rpc-server-configure.yml
 # Requires: 20-rpc-server-clone.yml (repo must be cloned first)
 # Idempotent: safe to re-run — replace tasks update existing values in place.
@@ -16,10 +15,8 @@
     conf_toml: "{{ rpc_server_path }}/Conf.toml"
     docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
     vrsc_conf: "{{ docker_verusd_path }}/mainnet/data_dir/VRSC/VRSC.conf"
-    # Fixed IP assignment for RPC server (per /24 convention: .11=daemon, .12=RPC)
     rpc_bind_ip: "10.201.0.12"
     rpc_bind_port: "37486"
-    # VRSC daemon address (inside Docker network)
     vrsc_daemon_ip: "10.201.0.11"
     vrsc_rpc_port: "27486"
 
@@ -31,15 +28,29 @@
       register: rpc_repo_stat
       failed_when: not rpc_repo_stat.stat.exists
 
-    # ── 2. Read RPC credentials from existing VRSC.conf ─────────────────────
+    # ── 2. Check if VRSC.conf has credentials ─────────────────────────────────
     - name: Check for existing VRSC.conf
       ansible.builtin.stat:
         path: "{{ vrsc_conf }}"
       register: vrsc_conf_stat
 
+    # ── 3. Always generate credentials (shell module, no Jinja interpolation) ────
+    - name: Generate rpcuser
+      ansible.builtin.shell:
+        cmd: "python3 -c \"import secrets; print(secrets.token_hex(16))\""
+      register: gen_rpcuser
+      changed_when: false
+
+    - name: Generate rpcpassword
+      ansible.builtin.shell:
+        cmd: "python3 -c \"import secrets; print(secrets.token_hex(24))\""
+      register: gen_rpcpass
+      changed_when: false
+
+    # ── 4. Set credential facts — prefer VRSC.conf, fall back to generated ──────
     - name: Read rpcuser from VRSC.conf
       ansible.builtin.shell:
-        cmd: "grep '^rpcuser=' {{ vrsc_conf }} 2>/dev/null | head -1 | cut -d= -f2 || echo '{{ '{{' }}NOT_FOUND{{ '}}' }}'"
+        cmd: "grep '^rpcuser=' {{ vrsc_conf }} 2>/dev/null | head -1 | cut -d= -f2 || echo ''"
       register: vrsc_rpcuser
       changed_when: false
       failed_when: false
@@ -47,49 +58,22 @@
 
     - name: Read rpcpassword from VRSC.conf
       ansible.builtin.shell:
-        cmd: "grep '^rpcpassword=' {{ vrsc_conf }} 2>/dev/null | head -1 | cut -d= -f2 || echo '{{ '{{' }}NOT_FOUND{{ '}}' }}'"
-      register: vrsc_rpcpassword
+        cmd: "grep '^rpcpassword=' {{ vrsc_conf }} 2>/dev/null | head -1 | cut -d= -f2 || echo ''"
+      register: vrsc_rpcpass
       changed_when: false
       failed_when: false
       when: vrsc_conf_stat.stat.exists
 
-    # ── 3. Generate credentials if not found ─────────────────────────────────
-    - name: Set credential facts — use existing VRSC.conf credentials
+    - name: Set final credential facts
       ansible.builtin.set_fact:
-        rpc_user: "{{ vrsc_rpcuser.stdout | trim }}"
-        rpc_pass: "{{ vrsc_rpcpassword.stdout | trim }}"
-      when:
-        - vrsc_conf_stat.stat.exists
-        - vrsc_rpcuser.stdout | trim != '{{' + '{{'}}NOT_FOUND{{ '}}' + '}}'
-        - vrsc_rpcpassword.stdout | trim != '{{' + '{{'}}NOT_FOUND{{ '}}' + '}}'
-
-    - name: Generate random credentials when VRSC.conf credentials not available
-      ansible.builtin.shell:
-        cmd: "python3 -c \"import secrets; print(secrets.token_hex(16))\""
-      register: generated_rpcuser
-      changed_when: false
-      when: not (vrsc_conf_stat.stat.exists and vrsc_rpcuser.stdout | trim != '{{' + '{{'}}NOT_FOUND{{ '}}' + '}}')
-
-    - name: Generate random password
-      ansible.builtin.shell:
-        cmd: "python3 -c \"import secrets; print(secrets.token_hex(24))\""
-      register: generated_rpcpass
-      changed_when: false
-      when: not (vrsc_conf_stat.stat.exists and vrsc_rpcpassword.stdout | trim != '{{' + '{{'}}NOT_FOUND{{ '}}' + '}}')
-
-    - name: Set credential facts — use generated credentials
-      ansible.builtin.set_fact:
-        rpc_user: "{{ generated_rpcuser.stdout | trim }}"
-        rpc_pass: "{{ generated_rpcpass.stdout | trim }}"
-      when: rpc_user is not defined
+        rpc_user: "{{ (vrsc_rpcuser.stdout | trim) if (vrsc_conf_stat.stat.exists and vrsc_rpcuser.stdout | trim | length > 0) else (gen_rpcuser.stdout | trim) }}"
+        rpc_pass: "{{ (vrsc_rpcpass.stdout | trim) if (vrsc_conf_stat.stat.exists and vrsc_rpcpass.stdout | trim | length > 0) else (gen_rpcpass.stdout | trim) }}"
 
     - name: Display credential source
       ansible.builtin.debug:
-        msg: >
-          RPC credentials: {{ 'read from VRSC.conf' if vrsc_conf_stat.stat.exists and vrsc_rpcuser.stdout != '{{{{}}}}NOT_FOUND{{}}}}' else 'generated randomly' }}.
-          User: {{ rpc_user }}
+        msg: "Credentials: {{ 'VRSC.conf' if vrsc_conf_stat.stat.exists and vrsc_rpcuser.stdout | trim | length > 0 else 'generated' }} → user={{ rpc_user }}"
 
-    # ── 4. Update Conf.toml — daemon URL ──────────────────────────────────────
+    # ── 5. Update Conf.toml ───────────────────────────────────────────────────
     - name: Update Conf.toml daemon_url
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
@@ -97,7 +81,6 @@
         replace: 'daemon_url = "http://{{ rpc_user }}:{{ rpc_pass }}@{{ vrsc_daemon_ip }}:{{ vrsc_rpc_port }}"'
       register: conf_daemon_updated
 
-    # ── 5. Update Conf.toml — bind IP ─────────────────────────────────────────
     - name: Update Conf.toml bind IP
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
@@ -105,7 +88,6 @@
         replace: 'bind_ip = "{{ rpc_bind_ip }}"'
       register: conf_bind_ip_updated
 
-    # ── 6. Update Conf.toml — bind port ──────────────────────────────────────
     - name: Update Conf.toml bind port
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
@@ -113,14 +95,13 @@
         replace: 'bind_port = {{ rpc_bind_port }}'
       register: conf_bind_port_updated
 
-    # ── 7. Summary ─────────────────────────────────────────────────────────────
     - name: Display configuration summary
       ansible.builtin.debug:
         msg: |
           Conf.toml configured:
-            daemon_url → http://{{ rpc_user }}:{{ rpc_pass }}@{{ vrsc_daemon_ip }}:{{ vrsc_rpc_port }}
+            daemon_url → http://{{ rpc_user }}:[redacted]@{{ vrsc_daemon_ip }}:{{ vrsc_rpc_port }}
             bind_ip   → {{ rpc_bind_ip }}
             bind_port → {{ rpc_bind_port }}
-          Daemon URL updated: {{ conf_daemon_updated.changed }}
-          Bind IP updated:     {{ conf_bind_ip_updated.changed }}
-          Bind port updated:   {{ conf_bind_port_updated.changed }}
+          daemon_url updated: {{ conf_daemon_updated.changed }}
+          bind_ip updated:     {{ conf_bind_ip_updated.changed }}
+          bind_port updated:   {{ conf_bind_port_updated.changed }}

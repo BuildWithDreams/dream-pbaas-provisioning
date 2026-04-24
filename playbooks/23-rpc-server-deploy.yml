@@ -98,8 +98,7 @@
     # ── 4. Deploy with docker compose ──────────────────────────────────────────
     - name: Start RPC server container
       ansible.builtin.shell:
-        cmd: "cd {{ rpc_server_path }} && COMPOSE_PROJECT_NAME={{ compose_project }} docker compose up -d"
-        timeout: 60
+        cmd: "timeout 120 docker compose -p {{ compose_project }} up -d"
       register: compose_up
       changed_when: true
 
