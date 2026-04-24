@@ -14,7 +14,7 @@
     rpc_server_path: "/home/{{ ansible_user }}/rust_verusd_rpc_server"
     conf_toml: "{{ rpc_server_path }}/Conf.toml"
     docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
-    vrsc_conf: "{{ docker_verusd_path }}/mainnet/data_dir/VRSC/VRSC.conf"
+    vrsc_conf: "{{ docker_verusd_path }}/mainnet/data_dir/VRSC.conf"
     rpc_bind_ip: "10.201.0.12"
     rpc_bind_port: "37486"
     vrsc_daemon_ip: "10.201.0.11"
