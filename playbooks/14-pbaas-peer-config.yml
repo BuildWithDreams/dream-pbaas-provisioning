@@ -12,7 +12,8 @@
 #
 # Required vars:
 #   pbaas_chain  — chain name: varrr, vdex, or chips
-#   peers        — list of {host, port} dicts. Must be provided via -e
+#   peers        — list of {host, port} dicts. Must be provided via -e as JSON:
+#                   -e '{"peers": [{host: "1.2.3.4", port: 20777}]}'
 
 ---
 - name: Configure PBaaS chain peer connections
@@ -99,10 +100,10 @@
         msg: |
           Peer configuration applied to {{ conf_file }}:
           {% for entry in peer_lines.results %}
-          {%   if entry.changed %}
-          + {{ entry.line }}
+          {%   if entry.get('changed') %}
+          + {{ entry.get('line', '?') }}
           {%   else %}
-          = {{ entry.line }} (already present)
+          = {{ entry.get('line', '?') }} (already present)
           {%   endif %}
           {% endfor %}
 
