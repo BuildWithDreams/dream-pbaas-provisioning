@@ -97,7 +97,7 @@
     # 6. Check if container already running
     - name: Check for existing container
       ansible.builtin.shell:
-        cmd: "docker ps --format '{{.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1$' || true"
+        cmd: !unsafe 'docker ps --format "{{.Names}}" | grep -E "{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1$" || true'
       register: existing_container
       changed_when: false
 
