@@ -1,0 +1,165 @@
+# Playbook: 14-pbaas-peer-config.yml
+# Purpose: Add explicit peer connect + whitelist entries to a PBaaS chain's .conf file.
+#          Idempotent — only adds peers that are not already configured.
+#
+# Closes: BuildWithDreams/dream-pbaas-provisioning#11
+#
+# Run with:
+#   ansible-playbook -i inventory.ini playbooks/14-pbaas-peer-config.yml \
+#     -e pbaas_chain=varrr
+#
+#   # With custom peers
+#   ansible-playbook -i inventory.ini playbooks/14-pbaas-peer-config.yml \
+#     -e pbaas_chain=varrr \
+#     -e "peers=[{host: '198.244.188.47', port: 20777}]"
+#
+# Required vars:
+#   pbaas_chain  — chain name: varrr, vdex, or chips
+#
+# Optional vars:
+#   peers        — list of {host, port} dicts.
+#                   Defaults to chain-specific seed nodes (see pbaas_default_peers below).
+
+---
+- name: Configure PBaaS chain peer connections
+  hosts: production
+  become: false
+
+  vars:
+    # Per-chain defaults. These are publicly known seed nodes and are safe to include.
+    pbaas_default_peers:
+      varrr:
+        - { host: "198.244.188.47", port: 20777 }
+        - { host: "89.117.149.133", port: 20777 }
+        - { host: "217.15.160.231",  port: 20777 }
+      vdex:
+        - { host: "89.117.149.133", port: 21778 }
+        - { host: "217.15.160.231",  port: 21778 }
+      chips:
+        - { host: "89.117.149.133", port: 22777 }
+        - { host: "217.15.160.231",  port: 22777 }
+
+    pbaas_chain_info:
+      varrr:
+        subdir: pbaas/varrr
+        hex: e9e10955b7d16031e3d6f55d9c908a038e3ae47d
+      vdex:
+        subdir: pbaas/vdex
+        hex: 53fe39eea8c06bba32f1a4e20db67e5524f0309d
+      chips:
+        subdir: pbaas/chips
+        hex: f315367528394674d45277e369629605a1c3ce9f
+
+    # Use provided peers list or fall back to defaults for the chain
+    peers: "{{ pbaas_default_peers[pbaas_chain] | default([]) }}"
+
+  tasks:
+    - name: Validate pbaas_chain is known
+      ansible.builtin.assert:
+        that:
+          - pbaas_chain in pbaas_chain_info
+        fail_msg: "Unknown pbaas_chain: '{{ pbaas_chain }}'. Must be one of: varrr, vdex, chips."
+        success_msg: "pbaas_chain '{{ pbaas_chain }}' validated"
+
+    - name: Validate peers list is not empty
+      ansible.builtin.assert:
+        that:
+          - peers | length > 0
+        fail_msg: >
+          No peers provided and no defaults defined for '{{ pbaas_chain }}'.
+          Provide peers via -e "peers=[{host: ..., port: ...}]".
+
+    - name: Set chain paths
+      ansible.builtin.set_fact:
+        chain_subdir: "{{ pbaas_chain_info[pbaas_chain].subdir }}"
+        currencyid_hex: "{{ pbaas_chain_info[pbaas_chain].hex }}"
+
+    - name: Derive data_dir and conf file path
+      ansible.builtin.set_fact:
+        docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+        data_dir: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir"
+        conf_file: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
+
+    - name: Check conf file exists
+      ansible.builtin.stat:
+        path: "{{ conf_file }}"
+      register: conf_stat
+
+    - name: Fail if conf file is missing
+      ansible.builtin.fail:
+        msg: |
+          Conf file not found: {{ conf_file }}
+          Run playbook 11-setup-pbaas.yml first to generate the chain config.
+      when: not conf_stat.stat.exists
+
+    - name: Read current conf file contents
+      ansible.builtin.slurp:
+        src: "{{ conf_file }}"
+      register: conf_contents_b64
+
+    - name: Decode conf file
+      ansible.builtin.set_fact:
+        conf_content: "{{ conf_contents_b64.content | b64decode }}"
+
+    - name: Display current peer-related lines
+      ansible.builtin.debug:
+        msg: |
+          Existing connect/whitelist/addnode lines in {{ conf_file }}:
+          {{ conf_content.splitlines() | select('search', '^(connect|whitelist|addnode)=') | list | join('\n') or '(none)' }}
+
+    - name: Add connect= and whitelist= for each peer (idempotent)
+      ansible.builtin.lineinfile:
+        path: "{{ conf_file }}"
+        line: "{{ item[0] }}={{ item[1].host }}:{{ item[1].port }}"
+        regexp: "^{{ item[0] }}={{ item[1].host }}:{{ item[1].port }}$"
+        state: present
+      loop: "{{ ['connect', 'whitelist'] | product(peers) | list }}"
+      register: peer_lines
+
+    - name: Display changes made
+      ansible.builtin.debug:
+        msg: |
+          Peer configuration applied to {{ conf_file }}:
+          {% for entry in peer_lines.results %}
+          {%   if entry.changed %}
+          + {{ entry.line }}
+          {%   else %}
+          = {{ entry.line }} (already present)
+          {%   endif %}
+          {% endfor %}
+
+    - name: Verify final conf file
+      ansible.builtin.slurp:
+        src: "{{ conf_file }}"
+      register: final_conf_b64
+
+    - name: Display final peer section
+      ansible.builtin.debug:
+        msg: |
+          Final peer entries in {{ conf_file }}:
+          {{ final_conf_b64.content | b64decode | splitlines | select('search', '^(connect|whitelist|addnode)=') | list | join('\n') or '(none)' }}
+
+    - name: Restart container to pick up new peer config
+      ansible.builtin.shell:
+        cmd: >
+          docker compose -p {{ pbaas_chain }}_blue -f {{ docker_verusd_path }}/{{ chain_subdir }}/docker-compose.yaml restart
+      register: restart_result
+      changed_when: "'Restarting' in restart_result.stdout or 'Restarted' in restart_result.stdout"
+
+    - name: Wait for container to be healthy
+      ansible.builtin.pause:
+        seconds: 15
+      changed_when: false
+
+    - name: Verify container is running
+      ansible.builtin.shell:
+        cmd: !unsafe "docker ps --format '{{.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1' | wc -l | tr -d ' '"
+      register: container_check
+      changed_when: false
+
+    - name: Confirm restart
+      ansible.builtin.debug:
+        msg: |
+          ✅ Container restart {{ 'succeeded' if (container_check.stdout | trim | int) > 0 else 'FAILED — check manually' }}
+          Container: {{ pbaas_chain }}_blue-{{ pbaas_chain }}-1
+          Peer config written to: {{ conf_file }}
