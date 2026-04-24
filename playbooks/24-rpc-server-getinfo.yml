@@ -16,7 +16,7 @@
     # ── 1. Curl getinfo (no credentials — RPC server handles daemon auth internally) ─
     - name: Curl getinfo
       ansible.builtin.shell:
-        cmd: "curl -s -f '{{ rpc_url }}'"
+        cmd: "curl -s -f -X POST '{{ rpc_url }}' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getinfo\",\"params\":[]}'"
         timeout: 15
       register: getinfo_result
       changed_when: false
@@ -36,20 +36,21 @@
       ansible.builtin.debug:
         msg: |
           status  → {{ 'OK' if getinfo_result.rc == 0 else 'FAIL' }}
-          version → {{ info.version | default('N/A') }}
-          blocks  → {{ info.blocks | default('N/A') }}
-          balance → {{ info.balance | default(info.money_supply | default('N/A')) }}
-          chain   → {{ info.chain | default('N/A') }}
+          version → {{ info.result.version | default('N/A') }}
+          blocks  → {{ info.result.blocks | default('N/A') }}
+          balance → {{ info.result.balance | default(info.result.money_supply | default('N/A')) }}
+          chain   → {{ info.result.chain | default('N/A') }}
       when: info is defined
 
-    # ── 4. Assert health ────────────────────────────────────────────────────────
-    - name: Assert blocks field is present
+    # ── 3. Assert health ────────────────────────────────────────────────────────
+    - name: Assert result field is present
       ansible.builtin.assert:
         that:
           - "getinfo_result.rc == 0"
           - "getinfo_result.stdout | length > 0"
-          - "info.blocks is defined"
-          - "info.blocks | int >= 0"
+          - "info.result is defined"
+          - "info.result.blocks is defined"
+          - "info.result.blocks | int >= 0"
         fail_msg: "getinfo check failed — RPC server may be unreachable or daemon is down"
-        success_msg: "RPC server is healthy — getinfo returned valid response"
+        success_msg: "RPC server is healthy — getinfo returned valid JSON-RPC response"
       when: info is defined
