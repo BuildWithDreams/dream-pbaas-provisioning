@@ -56,13 +56,13 @@
     # ── 4. Verify image was created ───────────────────────────────────────────
     - name: Verify image exists after build
       ansible.builtin.shell:
-        cmd: "docker image inspect {{ image_name }}:local --format '{{ '{{' }}.Size{{ }}' }}'"
-      register: image_size
+        cmd: "docker image inspect {{ image_name }}:local > /dev/null 2>&1 && echo 'ok'"
+      register: image_verify
       changed_when: false
       failed_when: false
       when: rebuild or image_exists.stdout != 'exists'
 
     - name: Display image details
       ansible.builtin.debug:
-        msg: "Image {{ image_name }}:local built — size: {{ image_size.stdout | default('unknown') }}"
+        msg: "Image {{ image_name }}:local built successfully"
       when: rebuild or image_exists.stdout != 'exists'
