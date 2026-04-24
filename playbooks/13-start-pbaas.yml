@@ -138,7 +138,7 @@
 
     - name: Check container status
       ansible.builtin.shell:
-        cmd: "docker ps --format '{{.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1$' || true"
+        cmd: !unsafe 'docker ps --format "{{.Names}}" | grep -E "{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1$" || true'
       register: container_check
       changed_when: false
 
