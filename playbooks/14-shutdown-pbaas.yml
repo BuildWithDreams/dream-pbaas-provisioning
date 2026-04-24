@@ -58,7 +58,7 @@
     # 3. Detect running PBaaS container
     - name: Find running PBaaS container
       ansible.builtin.shell:
-        cmd: "docker ps --format '{{.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1$' || true"
+        cmd: "docker ps --format '{{`{{`}}.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1$' || true"
       register: running_container
       changed_when: false
 
@@ -83,12 +83,11 @@
       retries: "{{ (startup_wait_seconds / startup_poll_seconds) | int }}"
       delay: "{{ startup_poll_seconds }}"
       when: running_container.stdout | length > 0
-      register: daemon_ready
 
     - name: Check if daemon is still loading
       ansible.builtin.debug:
         msg: "Daemon is still loading block index — waiting... (this is normal after a no-bootstrap restart)"
-      when: running_container.stdout | length > 0 and daemon_ready.changed
+      when: running_container.stdout | length > 0 and getinfo_result.changed
 
     # 5. Graceful verusd shutdown (verus-cli stop)
     - name: Signal verusd to stop gracefully

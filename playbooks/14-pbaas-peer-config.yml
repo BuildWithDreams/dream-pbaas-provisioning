@@ -120,13 +120,13 @@
 
     - name: Verify container is running
       ansible.builtin.shell:
-        cmd: "docker ps --filter name=varrr_blue-varrr-1 --format '{{.Names}}' 2>/dev/null | grep -q . && echo running || echo stopped"
+        cmd: "docker ps --filter name={{ pbaas_chain }}_blue-{{ pbaas_chain }}-1 --format '{{`{{`}}.Names}}' 2>/dev/null | grep -q . && echo running || echo stopped"
       register: container_check
       changed_when: false
 
     - name: Confirm restart
       ansible.builtin.debug:
         msg: |
-          ✅ Container restart {{ 'succeeded' if (container_check.stdout | trim | int) > 0 else 'FAILED — check manually' }}
+          ✅ Container restart {{ 'succeeded' if 'running' in container_check.stdout else 'FAILED — check manually' }}
           Container: {{ pbaas_chain }}_blue-{{ pbaas_chain }}-1
           Peer config written to: {{ conf_file }}
