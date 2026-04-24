@@ -132,7 +132,7 @@
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
         regexp: '^server_port=.*'
-        replace: 'server_port = {{ rpc_bind_port }}'
+        replace: 'server_port = "{{ rpc_bind_port }}"'
       register: conf_server_port_updated
 
     - name: Display configuration summary
