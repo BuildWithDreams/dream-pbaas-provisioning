@@ -109,9 +109,9 @@
 
     - name: Restart container to pick up new peer config
       ansible.builtin.shell:
-        cmd: !unsafe "cd /home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }} && docker compose -p {{ pbaas_chain }}_blue restart"
+        cmd: "cd /home/{{ lookup('env', 'USER') }}/docker-verusd/{{ chain_subdir }} && docker compose -p {{ pbaas_chain }}_blue restart"
       register: restart_result
-      changed_when: "'Restarting' in restart_result.stdout or 'Restarted' in restart_result.stdout"
+      changed_when: restart_result.rc == 0
 
     - name: Wait for container to be healthy
       ansible.builtin.pause:
@@ -120,7 +120,7 @@
 
     - name: Verify container is running
       ansible.builtin.shell:
-        cmd: !unsafe "docker ps --format '{{.Names}}' | grep '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1' | wc -l | tr -d ' '"
+        cmd: "docker ps --filter name=varrr_blue-varrr-1 --format '{{.Names}}' 2>/dev/null | grep -q . && echo running || echo stopped"
       register: container_check
       changed_when: false
 

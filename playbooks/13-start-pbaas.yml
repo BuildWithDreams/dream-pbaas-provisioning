@@ -1,0 +1,152 @@
+# Playbook: 13-start-pbaas.yml
+# Purpose: Start a PBaaS chain container via docker-compose
+# Run with: ansible-playbook -i inventory.ini playbooks/13-start-pbaas.yml -e pbaas_chain=varrr
+#
+# Required vars:
+#   pbaas_chain   — chain name: varrr, vdex, or chips
+
+---
+- name: Start PBaaS chain
+  hosts: production
+  become: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    pbaas_chain_info:
+      varrr:
+        subdir: pbaas/varrr
+        hex: e9e10955b7d16031e3d6f55d9c908a038e3ae47d
+      vdex:
+        subdir: pbaas/vdex
+        hex: 53fe39eea8c06bba32f1a4e20db67e5524f0309d
+      chips:
+        subdir: pbaas/chips
+        hex: f315367528394674d45277e369629605a1c3ce9f
+
+  tasks:
+    # 1. Validate pbaas_chain
+    - name: Validate pbaas_chain is known
+      ansible.builtin.assert:
+        that:
+          - pbaas_chain in pbaas_chain_info
+        fail_msg: "Unknown pbaas_chain: '{{ pbaas_chain }}'. Must be one of: varrr, vdex, chips."
+        success_msg: "pbaas_chain '{{ pbaas_chain }}' validated"
+
+    # 2. Derive paths
+    - name: Set chain paths
+      ansible.builtin.set_fact:
+        chain_subdir: "{{ pbaas_chain_info[pbaas_chain].subdir }}"
+        currencyid_hex: "{{ pbaas_chain_info[pbaas_chain].hex }}"
+
+    - name: Set compose directory
+      ansible.builtin.set_fact:
+        chain_path: "{{ docker_verusd_path }}/{{ chain_subdir }}"
+
+    - name: Display chain configuration
+      ansible.builtin.debug:
+        msg: |
+          Chain: {{ pbaas_chain }}
+          Currency hex: {{ currencyid_hex }}
+          Chain dir: {{ chain_path }}
+
+    # 3. Fetch latest verus version for image tag
+    - name: Fetch latest Verus release version
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/VerusCoin/VerusCoin/releases/latest"
+        method: GET
+        headers:
+          Accept: "application/vnd.github+json"
+        timeout: 15
+      register: github_release
+      changed_when: false
+
+    - name: Resolve image tag
+      ansible.builtin.set_fact:
+        verus_image_tag: "{{ github_release.json.tag_name | regex_replace('^v', '') }}"
+
+    # 4. Read .env for network name
+    - name: Read .env for Docker network
+      ansible.builtin.command:
+        cmd: "cat {{ chain_path }}/.env"
+      register: chain_env
+      changed_when: false
+      failed_when: false
+
+    - name: Set Docker network name fact
+      ansible.builtin.set_fact:
+        docker_network_name: "{{ chain_env.stdout | regex_search('DOCKER_NETWORK_NAME=(\\S+)', '\\1') | first }}"
+
+    - name: Display resolved settings
+      ansible.builtin.debug:
+        msg: |
+          Network: {{ docker_network_name }}
+          Image: buildwithdreams/verusd:{{ verus_image_tag }}
+
+    # 5. Verify Docker network exists
+    - name: Check if Docker network exists
+      ansible.builtin.command:
+        cmd: "docker network inspect {{ docker_network_name }}"
+      register: network_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if network not found
+      ansible.builtin.fail:
+        msg: "Network '{{ docker_network_name }}' not found. Run 03-docker-networks.yml first."
+      when: network_check.rc != 0
+
+    # 6. Check if container already running
+    - name: Check for existing container
+      ansible.builtin.shell:
+        cmd: "docker ps --format '{{.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1$' || true"
+      register: existing_container
+      changed_when: false
+
+    - name: Container already running
+      ansible.builtin.debug:
+        msg: "Container '{{ existing_container.stdout }}' is already running — nothing to do."
+      when: existing_container.stdout | length > 0
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "No container running — starting fresh."
+      when: existing_container.stdout | length == 0
+
+    # 7. Pull latest image and start container
+    - name: Pull latest image and start container
+      ansible.builtin.shell:
+        cmd: |
+          set -a
+          source "{{ chain_path }}/.env"
+          set +a
+          cd "{{ chain_path }}"
+          IMAGE="buildwithdreams/verusd:{{ verus_image_tag }}" docker compose pull
+          IMAGE="buildwithdreams/verusd:{{ verus_image_tag }}" docker compose up -d
+      register: compose_up
+      changed_when: true
+      when: existing_container.stdout | length == 0
+
+    - name: Display compose output
+      ansible.builtin.debug:
+        msg: "{{ compose_up.stdout_lines }}"
+      when: compose_up.stdout_lines | length > 0
+
+    # 8. Verify container is running
+    - name: Wait for container to start
+      ansible.builtin.pause:
+        seconds: 10
+      when: existing_container.stdout | length == 0
+
+    - name: Check container status
+      ansible.builtin.shell:
+        cmd: "docker ps --format '{{.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1$' || true"
+      register: container_check
+      changed_when: false
+
+    - name: Display final container status
+      ansible.builtin.debug:
+        msg: |
+          {% if container_check.stdout | length > 0 %}
+          Container started: {{ container_check.stdout }}
+          {% else %}
+          Container may still be starting — check manually with: docker ps | grep {{ pbaas_chain }}
+          {% endif %}

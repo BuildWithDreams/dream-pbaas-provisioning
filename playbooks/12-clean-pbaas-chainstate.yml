@@ -103,7 +103,7 @@
 
     - name: Stop container before cleaning chainstate
       ansible.builtin.shell:
-        cmd: "docker stop -t 60 varrr_blue-varrr-1 2>/dev/null || docker stop -t 60 {{ pbaas_chain }}_blue-{{ pbaas_chain }}-1 2>/dev/null || true"
+        cmd: "docker stop -t 60 {{ pbaas_chain }}_blue-{{ pbaas_chain }}-1 2>/dev/null || true"
       changed_when: true
       failed_when: false
       register: container_stop
