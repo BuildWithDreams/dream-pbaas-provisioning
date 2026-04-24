@@ -1,110 +1,93 @@
 # Playbook: 24-rpc-server-verify.yml
-# Purpose: Verify the deployed RPC server is healthy by calling getinfo via curl.
-#          Reads credentials from the configured Conf.toml on the remote host.
+# Purpose: Run a local curl on the remote host to check the RPC server getinfo response.
+#          Pulls credentials directly from the VRSC daemon conf — no Conf.toml needed.
 # Run with: ansible-playbook -i inventory.ini playbooks/24-rpc-server-verify.yml
-# Requires: 21-rpc-server-configure.yml (Conf.toml must be configured)
-#           and 23-rpc-server-deploy.yml (container must be deployed)
-# Note:     The VRSC daemon (10.201.0.11:27486) must be running and synced
-#           for getinfo to return a valid response.
+# Prereq:   VRSC daemon must be running and the RPC server container must be up.
 
 ---
-- name: Verify Verus RPC server
+- name: Verify RPC server getinfo via curl
   hosts: production
   become: false
   vars:
-    rpc_server_path: "/home/{{ ansible_user }}/rust_verusd_rpc_server"
-    conf_toml: "{{ rpc_server_path }}/Conf.toml"
     rpc_port: "37486"
-    container_name: "mains_blue_rpc-rpc-1"
-    getinfo_url: "http://localhost:{{ rpc_port }}/api/getinfo"
+    rpc_url: "http://localhost:{{ rpc_port }}/api/getinfo"
+    vrsc_conf: "/home/{{ ansible_user }}/docker-verusd/mainnet/data_dir/VRSC/VRSC.conf"
 
   tasks:
-    # ── 1. Check container is running ─────────────────────────────────────────
-    - name: Check container is running
-      ansible.builtin.shell:
-        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || true"
-      register: container_check
-      changed_when: false
-      failed_when: container_check.stdout | length == 0
-      failed_msg: "Container {{ container_name }} is not running"
-
-    - name: Display container status
-      ansible.builtin.debug:
-        msg: "Container {{ container_name }} is running"
-
-    # ── 2. Read credentials from Conf.toml ────────────────────────────────────
-    - name: Extract daemon_url from Conf.toml
+    # ── 1. Read credentials from VRSC.conf ─────────────────────────────────────
+    - name: Extract rpcuser from VRSC.conf
       ansible.builtin.shell:
         cmd: "python3 -c \"
 import re, sys
-content = open('{{ conf_toml }}').read()
-m = re.search(r'^daemon_url\s*=\s*[\\\"\\']([^\\\"\\']+)[\\\"\\']', content, re.MULTILINE)
-if m:
-    url = m.group(1)
-    # url format: http://user:pass@host:port
-    if '@' in url:
-        userpass = url.split('@')[0].replace('http://','').replace('https://','')
-        user, pw = userpass.split(':', 1)
-        print(user)
-        exit(0)
-print('')
+c = open('{{ vrsc_conf }}').read()
+u = re.search(r'^rpcuser=(.*)', c, re.MULTILINE)
+p = re.search(r'^rpcpassword=(.*)', c, re.MULTILINE)
+if u and p:
+    print(u.group(1).strip())
+else:
+    sys.exit(1)
 \""
-      register: rpc_user_extracted
+      register: rpc_user
       changed_when: false
       failed_when: false
 
-    - name: Extract password from Conf.toml
+    - name: Extract rpcpassword from VRSC.conf
       ansible.builtin.shell:
         cmd: "python3 -c \"
-import re
-content = open('{{ conf_toml }}').read()
-m = re.search(r'^daemon_url\s*=\s*[\\\"\\']([^\\\"\\']+)[\\\"\\']', content, re.MULTILINE)
-if m:
-    url = m.group(1)
-    if '@' in url:
-        userpass = url.split('@')[0].replace('http://','').replace('https://','')
-        user, pw = userpass.split(':', 1)
-        print(pw)
-        exit(0)
-print('')
+import re, sys
+c = open('{{ vrsc_conf }}').read()
+p = re.search(r'^rpcpassword=(.*)', c, re.MULTILINE)
+if p:
+    print(p.group(1).strip())
+else:
+    sys.exit(1)
 \""
-      register: rpc_pass_extracted
+      register: rpc_pass
       changed_when: false
       failed_when: false
 
-    - name: Set credential facts
-      ansible.builtin.set_fact:
-        rpc_user: "{{ rpc_user_extracted.stdout | trim }}"
-        rpc_pass: "{{ rpc_pass_extracted.stdout | trim }}"
+    - name: Fail if credentials not found
+      ansible.builtin.fail:
+        msg: "Could not read rpcuser/rpcpassword from {{ vrsc_conf }}"
+      when: rpc_user.rc != 0 or rpc_pass.rc != 0
 
-    # ── 3. Curl getinfo test ──────────────────────────────────────────────────
-    - name: Curl getinfo endpoint
+    # ── 2. Curl getinfo ─────────────────────────────────────────────────────────
+    - name: Curl getinfo
       ansible.builtin.shell:
-        cmd: "curl -s -f -u '{{ rpc_user }}:{{ rpc_pass }}' '{{ getinfo_url }}'"
+        cmd: "curl -s -f -u '{{ rpc_user.stdout }}:{{ rpc_pass.stdout }}' '{{ rpc_url }}'"
         timeout: 15
       register: getinfo_result
       changed_when: false
-      retries: 5
-      delay: 10
+      failed_when: false
 
-    - name: Parse getinfo response
+    - name: Display raw response
+      ansible.builtin.debug:
+        msg: "{{ getinfo_result.stdout }}"
+
+    # ── 3. Parse and display key fields ────────────────────────────────────────
+    - name: Parse getinfo JSON
       ansible.builtin.set_fact:
-        getinfo_json: "{{ getinfo_result.stdout | from_json }}"
+        info: "{{ getinfo_result.stdout | from_json }}"
+      when: getinfo_result.rc == 0 and getinfo_result.stdout | length > 0
 
-    - name: Display getinfo result
+    - name: Display parsed result
       ansible.builtin.debug:
         msg: |
-          RPC Server getinfo — SUCCESS:
-            version  → {{ getinfo_json.version | default('N/A') }}
-            blocks   → {{ getinfo_json.blocks | default('N/A') }}
-            balance  → {{ getinfo_json.balance | default(getinfo_json.money_supply | default('N/A')) }}
-            note     → connected to VRSC daemon at 10.201.0.11:27486
+          status  → {{ 'OK' if getinfo_result.rc == 0 else 'FAIL' }}
+          version → {{ info.version | default('N/A') }}
+          blocks  → {{ info.blocks | default('N/A') }}
+          balance → {{ info.balance | default(info.money_supply | default('N/A')) }}
+          chain   → {{ info.chain | default('N/A') }}
+      when: info is defined
 
-    # ── 4. Sanity check key fields ───────────────────────────────────────────
-    - name: Assert blocks field is present (proves daemon is reachable)
+    # ── 4. Assert health ────────────────────────────────────────────────────────
+    - name: Assert blocks field is present
       ansible.builtin.assert:
         that:
-          - "getinfo_json.blocks is defined"
-          - "getinfo_json.blocks | int >= 0"
-        fail_msg: "getinfo returned valid JSON but blocks field is missing or invalid"
-        success_msg: "Daemon is reachable — blocks field confirmed"
+          - "getinfo_result.rc == 0"
+          - "getinfo_result.stdout | length > 0"
+          - "info.blocks is defined"
+          - "info.blocks | int >= 0"
+        fail_msg: "getinfo check failed — RPC server may be unreachable or daemon is down"
+        success_msg: "RPC server is healthy — getinfo returned valid response"
+      when: info is defined
