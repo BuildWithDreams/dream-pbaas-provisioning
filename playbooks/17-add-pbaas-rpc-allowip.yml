@@ -48,11 +48,8 @@
       ansible.builtin.set_fact:
         chain_subdir: "{{ pbaas_chain_info[pbaas_chain].subdir }}"
         currencyid_hex: "{{ pbaas_chain_info[pbaas_chain].hex }}"
-        chain_path: "{{ docker_verusd_path }}/{{ chain_subdir }}"
-
-    - name: Set PBaaS conf file path
-      ansible.builtin.set_fact:
-        conf_file: "{{ chain_path }}/data_dir/{{ currencyid_hex }}.conf"
+        chain_path: "{{ docker_verusd_path }}/{{ pbaas_chain_info[pbaas_chain].subdir }}"
+        conf_file: "{{ docker_verusd_path }}/{{ pbaas_chain_info[pbaas_chain].subdir }}/data_dir/{{ pbaas_chain_info[pbaas_chain].hex }}.conf"
 
     - name: Display chain configuration
       ansible.builtin.debug:

@@ -58,7 +58,7 @@
     # 3. Detect running PBaaS container
     - name: Find running PBaaS container
       ansible.builtin.shell:
-        cmd: !unsafe 'docker ps --format "{{.Names}}" | grep -E "_{{ pbaas_chain }}-{{ pbaas_chain }}-1$" || true'
+        cmd: 'docker ps 2>&1 | grep -E "mains_blue-{{ pbaas_chain }}-1" | grep -v grep | head -1 || true'
       register: running_container
       changed_when: false
 
