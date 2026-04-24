@@ -1,0 +1,114 @@
+# Playbook: 23-rpc-server-deploy.yml
+# Purpose: Create docker-compose.yml for the RPC server and deploy the container.
+#          Uses a fixed IP (10.201.0.12) on the VRSC mainnet Docker network.
+# Run with: ansible-playbook -i inventory.ini playbooks/23-rpc-server-deploy.yml
+# Requires: 22-rpc-server-build.yml (image must exist)
+# Idempotent: safe to re-run — stops old container before starting fresh.
+
+---
+- name: Deploy Verus RPC server
+  hosts: production
+  become: false
+  vars:
+    rpc_server_path: "/home/{{ ansible_user }}/rust_verusd_rpc_server"
+    compose_file: "{{ rpc_server_path }}/docker-compose.yml"
+    image_name: "buildwithdreams/rpc_server"
+    compose_project: "mains_blue_rpc"
+    container_name: "{{ compose_project }}-rpc-1"
+    docker_network: "net-vrsc-blue"
+    rpc_bind_ip: "10.201.0.12"
+    rpc_bind_port: "37486"
+    host_rpc_port: "37486"
+
+  tasks:
+    # ── 1. Verify image exists ────────────────────────────────────────────────
+    - name: Verify image is built
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:local > /dev/null 2>&1 && echo 'ok' || echo 'missing'"
+      register: image_check
+      changed_when: false
+      failed_when: image_check.stdout != 'ok'
+
+    # ── 2. Stop existing container if running ─────────────────────────────────
+    - name: Remove old container if it exists
+      ansible.builtin.shell:
+        cmd: "docker rm -f {{ container_name }} 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 3. Write docker-compose.yml ────────────────────────────────────────────
+    - name: Create docker-compose.yml
+      ansible.builtin.copy:
+        content: |
+          # docker-compose.yml — Verus RPC Server (mains_blue)
+          # Built from: buildwithdreams/rust_verusd_rpc_server
+          version: "3.9"
+
+          services:
+            rpc:
+              image: {{ image_name }}:local
+              container_name: {{ container_name }}
+              hostname: verusd-rpc
+              ports:
+                - "127.0.0.1:{{ host_rpc_port }}:{{ rpc_bind_port }}"
+              networks:
+                pbaas_network:
+                  ipv4_address: {{ rpc_bind_ip }}
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "curl", "-s", "-f", "-X", "POST", "http://{{ rpc_bind_ip }}:{{ rpc_bind_port }}/api/getinfo", "-H", "Content-Type: application/json", "-d", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getinfo\",\"params\":[]}"]
+                interval: "30s"
+                timeout: "10s"
+                retries: 3
+                start_period: "10s"
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+
+          networks:
+            pbaas_network:
+              name: {{ docker_network }}
+              external: true
+        dest: "{{ compose_file }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: compose_written
+
+    - name: Display compose file path
+      ansible.builtin.debug:
+        msg: "docker-compose.yml written to {{ compose_file }}"
+
+    # ── 4. Deploy with docker compose ──────────────────────────────────────────
+    - name: Start RPC server container
+      ansible.builtin.shell:
+        cmd: "timeout 120 docker compose -f {{ compose_file }} -p {{ compose_project }} up -d --force-recreate"
+      register: compose_up
+      changed_when: true
+
+    - name: Display deploy result
+      ansible.builtin.debug:
+        msg: "Container {{ container_name }} started: {{ compose_up.stdout_lines | join(' ') }}"
+
+    # ── 5. Wait for container to be running ───────────────────────────────────
+    - name: Verify container is running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || true"
+      register: running_verify
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: running_verify.stdout | length > 0
+      failed_when: false
+
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          RPC Server deployed:
+            container → {{ container_name }}
+            image     → {{ image_name }}:local
+            network   → {{ docker_network }}
+            IP        → {{ rpc_bind_ip }}
+            port      → localhost:{{ host_rpc_port }} → {{ rpc_bind_port }}

@@ -1,0 +1,68 @@
+# Playbook: 22-rpc-server-build.yml
+# Purpose: Build the Verus RPC server Docker image
+# Run with: ansible-playbook -i inventory.ini playbooks/22-rpc-server-build.yml
+#           Or with force rebuild: ansible-playbook -i inventory.ini playbooks/22-rpc-server-build.yml -e rpc_server_rebuild=true
+# Requires: 20-rpc-server-clone.yml (repo cloned) and 21-rpc-server-configure.yml (Conf.toml set)
+# Idempotent: skips if buildwithdreams/rpc_server:local already exists, unless rpc_server_rebuild=true
+
+---
+- name: Build Verus RPC server image
+  hosts: production
+  become: false
+  vars:
+    rpc_server_path: "/home/{{ ansible_user }}/rust_verusd_rpc_server"
+    image_name: "buildwithdreams/rpc_server"
+    rebuild: "{{ rpc_server_rebuild | default(false) | bool }}"
+
+  tasks:
+    # ── 1. Verify repo and Conf.toml exist ────────────────────────────────────
+    - name: Verify Conf.toml exists
+      ansible.builtin.stat:
+        path: "{{ rpc_server_path }}/Conf.toml"
+      register: conf_toml_stat
+      failed_when: not conf_toml_stat.stat.exists
+
+    # ── 2. Check if image already exists ──────────────────────────────────────
+    - name: Check for existing local image
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:local > /dev/null 2>&1 && echo 'exists' || echo 'missing'"
+      register: image_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Display build plan
+      ansible.builtin.debug:
+        msg: >
+          Image {{ image_name }}:local — {{ 'already exists (force rebuild disabled)' if image_exists.stdout == 'exists' and not rebuild else 'will be built' if rebuild or image_exists.stdout != 'exists' else 'exists, skipping (use -e rpc_server_rebuild=true to override)' }}
+
+    # ── 3. Build Docker image ─────────────────────────────────────────────────
+    - name: Build Docker image
+      ansible.builtin.shell:
+        cmd: "touch {{ rpc_server_path }}/Conf.toml && cd {{ rpc_server_path }} && docker build --no-cache -t {{ image_name }}:local -t {{ image_name }}:latest ."
+      register: build_result
+      when: rebuild or image_exists.stdout != 'exists'
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg: "Build {{ 'started' if (rebuild or image_exists.stdout != 'exists') else 'skipped' }}: {{ image_name }}:local"
+      when: rebuild or image_exists.stdout != 'exists'
+
+    - name: Display build output
+      ansible.builtin.debug:
+        msg: "{{ build_result.stdout_lines | join('\\n') }}"
+      when: rebuild or image_exists.stdout != 'exists'
+      failed_when: false
+
+    # ── 4. Verify image was created ───────────────────────────────────────────
+    - name: Verify image exists after build
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:local > /dev/null 2>&1 && echo 'ok'"
+      register: image_verify
+      changed_when: false
+      failed_when: false
+      when: rebuild or image_exists.stdout != 'exists'
+
+    - name: Display image details
+      ansible.builtin.debug:
+        msg: "Image {{ image_name }}:local built successfully"
+      when: rebuild or image_exists.stdout != 'exists'

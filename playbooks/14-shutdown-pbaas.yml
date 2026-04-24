@@ -106,8 +106,7 @@
     # 6. Stop container (extended timeout for I/O-bound flush)
     - name: Stop container
       ansible.builtin.shell:
-        cmd: "docker stop -t 60 {{ running_container.stdout }} 2>&1 || true"
-      timeout: 90
+        cmd: "timeout 90 docker stop -t 60 {{ running_container.stdout }} 2>&1 || true"
       register: docker_stop
       changed_when: true
       failed_when: false
