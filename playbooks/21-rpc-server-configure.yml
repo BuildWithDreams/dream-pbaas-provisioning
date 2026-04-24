@@ -73,7 +73,33 @@
       ansible.builtin.debug:
         msg: "Credentials: {{ 'VRSC.conf' if vrsc_conf_stat.stat.exists and vrsc_rpcuser.stdout | trim | length > 0 else 'generated' }} → user={{ rpc_user }}"
 
-    # ── 5. Update Conf.toml ───────────────────────────────────────────────────
+    # ── 5. Create Dockerfile (multi-stage build for Rust project) ────────────────
+    - name: Write Dockerfile
+      ansible.builtin.copy:
+        content: |
+          # Stage 1: Build the Rust binary
+          FROM rust:latest AS builder
+          WORKDIR /build
+          COPY Cargo.toml Cargo.lock ./
+          COPY src/ ./src/
+          RUN cargo build --release
+
+          # Stage 2: Minimal runtime image
+          FROM debian:bookworm-slim
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              ca-certificates curl \
+              && rm -rf /var/lib/apt/lists/*
+          COPY --from=builder /build/target/release/rust_verusd_rpc_server /usr/local/bin/rust_verusd_rpc_server
+          COPY Conf.toml /Conf.toml
+          WORKDIR /
+          EXPOSE 37486
+          CMD ["rust_verusd_rpc_server", "/Conf.toml"]
+        dest: "{{ rpc_server_path }}/Dockerfile"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    # ── 6. Update Conf.toml ───────────────────────────────────────────────────
     - name: Update Conf.toml daemon_url
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
