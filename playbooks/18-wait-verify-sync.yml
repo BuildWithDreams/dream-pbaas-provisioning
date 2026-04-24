@@ -28,14 +28,14 @@
     # 1. Pre-flight: verify both containers are running
     - name: Check VRSC container running
       ansible.builtin.shell:
-        cmd: "docker ps --filter name=mains_blue-vrsc-1 --format '{{.Names}}' 2>/dev/null | grep -q . && echo running || echo stopped"
+        cmd: "docker ps 2>&1 | grep -q 'mains_blue-vrsc-1' && echo running || echo stopped"
       register: vrsc_container_check
       changed_when: false
       failed_when: false
 
     - name: Check vDEX container running
       ansible.builtin.shell:
-        cmd: "docker ps --filter name=mains_blue-vdex-1 --format '{{.Names}}' 2>/dev/null | grep -q . && echo running || echo stopped"
+        cmd: "docker ps 2>&1 | grep -q 'mains_blue-vdex-1' && echo running || echo stopped"
       register: vdex_container_check
       changed_when: false
       failed_when: false

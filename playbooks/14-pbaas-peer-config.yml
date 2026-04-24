@@ -120,7 +120,7 @@
 
     - name: Verify container is running
       ansible.builtin.shell:
-        cmd: 'docker ps --filter name="{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1" --format "{{.Names}}" 2>/dev/null | grep -q . && echo running || echo stopped'
+        cmd: 'docker ps 2>&1 | grep -q "mains_blue-{{ pbaas_chain }}-1" && echo running || echo stopped'
       register: container_check
       changed_when: false
 
