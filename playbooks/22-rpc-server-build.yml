@@ -39,7 +39,6 @@
     - name: Build Docker image
       ansible.builtin.shell:
         cmd: "cd {{ rpc_server_path }} && docker build -t {{ image_name }}:local -t {{ image_name }}:latest ."
-        timeout: 600
       register: build_result
       when: rebuild or image_exists.stdout != 'exists'
 
