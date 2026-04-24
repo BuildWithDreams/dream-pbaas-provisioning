@@ -114,7 +114,7 @@
 
     - name: Verify container is stopped
       ansible.builtin.shell:
-        cmd: !unsafe "docker ps --format '{{.Names}}' | grep -E '{{ pbaas_chain }}_blue-{{ pbaas_chain }}-1' | wc -l | tr -d ' '"
+        cmd: "docker ps --format name | grep -E '_{{ pbaas_chain }}-{{ pbaas_chain }}-1$' | wc -l | tr -d ' '"
       register: container_check
       changed_when: false
       failed_when: false
