@@ -60,15 +60,17 @@
         conf_file: "/home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
 
     - name: Check conf file exists
-      ansible.builtin.stat:
-        path: "{{ conf_file }}"
-      register: conf_stat
+      ansible.builtin.shell:
+        cmd: "test -f {{ conf_file }} && echo present || echo missing"
+      register: conf_check
+      changed_when: false
 
     - name: Fail if conf file is missing
       ansible.builtin.fail:
         msg: |
           Conf file not found: {{ conf_file }}
           Run playbook 11-setup-pbaas.yml first to generate the chain config.
+      when: conf_check.stdout != "present"
 
     - name: Read current conf file contents
       ansible.builtin.slurp:
