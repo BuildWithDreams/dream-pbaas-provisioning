@@ -1,0 +1,168 @@
+# Playbook: 11-setup-pbaas.yml
+# Purpose: Configure a PBaaS chain — copy sample.conf to data_dir with secure random credentials
+# Run with: ansible-playbook -i inventory.ini playbooks/11-setup-pbaas.yml -e pbaas_chain=varrr
+#
+# Required vars:
+#   pbaas_chain   — chain name: varrr, vdex, or chips
+#
+# What it does:
+#   1. Validates pbaas_chain is one of the known chains
+#   2. Reads CURRENCYID_HEX from the chain's env.sample
+#   3. Creates data_dir/ if missing (owned by ansible_user)
+#   4. Generates rpcuser and rpcpassword using openssl rand
+#   5. Copies the sample.<hex>.conf to data_dir/<hex>.conf with credentials filled in
+#   6. Idempotent — skips if <hex>.conf already exists (must delete first to reconfigure)
+#
+# Example:
+#   ansible-playbook -i inventory.ini playbooks/11-setup-pbaas.yml -e pbaas_chain=vdex
+
+---
+- name: Set up PBaaS chain config
+  hosts: production
+  become: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+
+  # Map chain name → subdirectory and currencyidhex
+  # currencyidhex confirmed via getcurrency RPC on BWD VRSC mainnet container
+  pbaas_chain_info:
+    varrr:
+      subdir: pbaas/varrr
+      hex: e9e10955b7d16031e3d6f55d9c908a038e3ae47d
+    vdex:
+      subdir: pbaas/vdex
+      hex: 53fe39eea8c06bba32f1a4e20db67e5524f0309d
+    chips:
+      subdir: pbaas/chips
+      hex: f315367528394674d45277e369629605a1c3ce9f
+
+  tasks:
+    # 1. Validate pbaas_chain
+    - name: Validate pbaas_chain is known
+      ansible.builtin.assert:
+        that:
+          - pbaas_chain in pbaas_chain_info
+        fail_msg: |
+          Unknown pbaas_chain: '{{ pbaas_chain }}'.
+          Must be one of: varrr, vdex, chips.
+        success_msg: "pbaas_chain '{{ pbaas_chain }}' validated"
+
+    # 2. Derive paths from chain info
+    - name: Set chain paths
+      ansible.builtin.set_fact:
+        chain_subdir: "{{ pbaas_chain_info[pbaas_chain].subdir }}"
+        currencyid_hex: "{{ pbaas_chain_info[pbaas_chain].hex }}"
+
+    - name: Display chain configuration
+      ansible.builtin.debug:
+        msg: |
+          Chain: {{ pbaas_chain }}
+          Currency hex: {{ currencyid_hex }}
+          Chain dir: {{ docker_verusd_path }}/{{ chain_subdir }}
+          Config target: {{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf
+
+    # 3. Verify sample conf exists in repo
+    - name: Check sample conf exists
+      ansible.builtin.stat:
+        path: "{{ docker_verusd_path }}/{{ chain_subdir }}/sample.{{ currencyid_hex }}.conf"
+      register: sample_conf_check
+
+    - name: Fail if sample conf not found
+      ansible.builtin.fail:
+        msg: |
+          Sample conf not found at:
+          {{ docker_verusd_path }}/{{ chain_subdir }}/sample.{{ currencyid_hex }}.conf
+          Is the docker-verusd repo up to date? Run:
+            ansible-playbook -i inventory.ini playbooks/02-clone-repos.yml
+      when: not sample_conf_check.stat.exists
+
+    # 4. Ensure data_dir exists (may be gitignored/empty on first clone)
+    - name: Ensure data_dir exists
+      ansible.builtin.file:
+        path: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    # 5. Check if config already exists (idempotency gate)
+    - name: Check if config already exists
+      ansible.builtin.stat:
+        path: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
+      register: target_conf_check
+
+    - name: Display existing config status
+      ansible.builtin.debug:
+        msg: |
+          {% if target_conf_check.stat.exists %}
+          Config already exists — skipping generation.
+          To reconfigure: delete {{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf
+          and re-run this playbook.
+          {% else %}
+          No existing config — generating credentials and writing config.
+          {% endif %}
+      when: target_conf_check.stat.exists | bool
+
+    # 6. Generate credentials only if config does not exist
+    - name: Generate rpcuser
+      ansible.builtin.command:
+        cmd: "openssl rand -hex 16"
+      register: rpcuser_raw
+      changed_when: true
+      when: not target_conf_check.stat.exists | bool
+
+    - name: Generate rpcpassword
+      ansible.builtin.command:
+        cmd: "openssl rand -base64 32"
+      register: rpcpassword_raw
+      changed_when: true
+      when: not target_conf_check.stat.exists | bool
+
+    - name: Set credentials as facts
+      ansible.builtin.set_fact:
+        rpcuser: "{{ rpcuser_raw.stdout }}"
+        rpcpassword: "{{ rpcpassword_raw.stdout }}"
+      when: not target_conf_check.stat.exists | bool
+
+    # 7. Copy sample to data_dir and fill in credentials
+    - name: Copy sample.conf with credentials
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ docker_verusd_path }}/{{ chain_subdir }}/sample.{{ currencyid_hex }}.conf"
+        dest: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      register: conf_copy
+      when: not target_conf_check.stat.exists | bool
+
+    - name: Fill rpcuser in config
+      ansible.builtin.lineinfile:
+        path: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
+        regexp: '^(rpcuser=).*$'
+        line: '\1{{ rpcuser }}'
+      when: not target_conf_check.stat.exists | bool
+      register: rpcuser_filled
+
+    - name: Fill rpcpassword in config
+      ansible.builtin.lineinfile:
+        path: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
+        regexp: '^(rpcpassword=).*$'
+        line: '\1{{ rpcpassword }}'
+      when: not target_conf_check.stat.exists | bool
+      register: rpcpassword_filled
+
+    # 8. Summary
+    - name: Display final status
+      ansible.builtin.debug:
+        msg: |
+          {% if target_conf_check.stat.exists %}
+          PBaaS chain '{{ pbaas_chain }}' already configured.
+          Config: {{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf
+          {% else %}
+          PBaaS chain '{{ pbaas_chain }}' configured successfully.
+          Config: {{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf
+          rpcuser : {{ rpcuser }}
+          rpcpassword: {{ rpcpassword }}
+          NOTE: Save these credentials — they cannot be recovered.
+          {% endif %}
