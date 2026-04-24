@@ -54,6 +54,12 @@
     peers: "{{ pbaas_default_peers[pbaas_chain] | default([]) }}"
 
   tasks:
+    - name: Pull latest provisioning repo
+      ansible.builtin.shell:
+        cmd: "git -C /home/{{ ansible_user }}/provisioning pull --ff origin main"
+      register: git_pull
+      changed_when: "'Already up to date' not in git_pull.stdout"
+
     - name: Validate pbaas_chain is known
       ansible.builtin.assert:
         that:
@@ -113,7 +119,7 @@
         line: "connect={{ item.host }}"
         regexp: "^connect={{ item.host }}$"
         state: present
-      loop: "{{ peers }}"
+      loop: "{{ peers | from_json }}"
       register: peer_lines
 
     - name: Display changes made
