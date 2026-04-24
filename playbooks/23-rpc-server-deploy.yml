@@ -28,7 +28,6 @@
       register: image_check
       changed_when: false
       failed_when: image_check.stdout != 'ok'
-      failed_msg: "Image {{ image_name }}:local not found. Run playbooks/22-rpc-server-build.yml first."
 
     # ── 2. Stop existing container if running ─────────────────────────────────
     - name: Check for running container

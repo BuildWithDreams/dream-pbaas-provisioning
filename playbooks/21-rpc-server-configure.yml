@@ -100,34 +100,48 @@
         mode: '0644'
 
     # ── 6. Update Conf.toml ───────────────────────────────────────────────────
-    - name: Update Conf.toml daemon_url
+    - name: Update Conf.toml rpc_url
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
-        regexp: '^daemon_url=.*'
-        replace: 'daemon_url = "http://{{ rpc_user }}:{{ rpc_pass }}@{{ vrsc_daemon_ip }}:{{ vrsc_rpc_port }}"'
-      register: conf_daemon_updated
+        regexp: '^rpc_url=.*'
+        replace: 'rpc_url = "http://{{ rpc_user }}:{{ rpc_pass }}@{{ vrsc_daemon_ip }}:{{ vrsc_rpc_port }}"'
+      register: conf_rpc_url_updated
 
-    - name: Update Conf.toml bind IP
+    - name: Update Conf.toml rpc_user
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
-        regexp: '^bind_ip=.*'
-        replace: 'bind_ip = "{{ rpc_bind_ip }}"'
-      register: conf_bind_ip_updated
+        regexp: '^rpc_user=.*'
+        replace: 'rpc_user = "{{ rpc_user }}"'
+      register: conf_rpc_user_updated
 
-    - name: Update Conf.toml bind port
+    - name: Update Conf.toml rpc_password
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
-        regexp: '^bind_port=.*'
-        replace: 'bind_port = {{ rpc_bind_port }}'
-      register: conf_bind_port_updated
+        regexp: '^rpc_password=.*'
+        replace: 'rpc_password = "{{ rpc_pass }}"'
+      register: conf_rpc_pass_updated
+
+    - name: Update Conf.toml server_addr
+      ansible.builtin.replace:
+        path: "{{ conf_toml }}"
+        regexp: '^server_addr=.*'
+        replace: 'server_addr = "{{ rpc_bind_ip }}"'
+      register: conf_server_addr_updated
+
+    - name: Update Conf.toml server_port
+      ansible.builtin.replace:
+        path: "{{ conf_toml }}"
+        regexp: '^server_port=.*'
+        replace: 'server_port = {{ rpc_bind_port }}'
+      register: conf_server_port_updated
 
     - name: Display configuration summary
       ansible.builtin.debug:
         msg: |
           Conf.toml configured:
-            daemon_url → http://{{ rpc_user }}:[redacted]@{{ vrsc_daemon_ip }}:{{ vrsc_rpc_port }}
-            bind_ip   → {{ rpc_bind_ip }}
-            bind_port → {{ rpc_bind_port }}
-          daemon_url updated: {{ conf_daemon_updated.changed }}
-          bind_ip updated:     {{ conf_bind_ip_updated.changed }}
-          bind_port updated:   {{ conf_bind_port_updated.changed }}
+            rpc_url       → http://{{ rpc_user }}:[redacted]@{{ vrsc_daemon_ip }}:{{ vrsc_rpc_port }}
+            rpc_user      → {{ rpc_user }}
+            rpc_password  → [redacted]
+            server_addr   → {{ rpc_bind_ip }}
+            server_port   → {{ rpc_bind_port }}
+          All 5 fields updated.
