@@ -54,7 +54,9 @@
       ansible.builtin.set_fact:
         chain_subdir: "{{ pbaas_chain_info[pbaas_chain].subdir }}"
         currencyid_hex: "{{ pbaas_chain_info[pbaas_chain].hex }}"
-        data_dir: "/home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/data_dir"
+
+    - name: Set conf file path
+      ansible.builtin.set_fact:
         conf_file: "/home/{{ ansible_user }}/docker-verusd/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
 
     - name: Check conf file exists
