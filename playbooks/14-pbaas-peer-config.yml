@@ -12,10 +12,7 @@
 #
 # Required vars:
 #   pbaas_chain  — chain name: varrr, vdex, or chips
-#
-# Optional vars:
-#   peers        — list of {host, port} dicts.
-#                   Must be provided via -e "peers=[...]"
+#   peers        — list of {host, port} dicts. Must be provided via -e
 
 ---
 - name: Configure PBaaS chain peer connections
@@ -42,9 +39,10 @@
         fail_msg: "Unknown pbaas_chain: '{{ pbaas_chain }}'. Must be one of: varrr, vdex, chips."
         success_msg: "pbaas_chain '{{ pbaas_chain }}' validated"
 
-    - name: Validate peers list is not empty
+    - name: Validate peers is a list
       ansible.builtin.assert:
         that:
+          - peers is iterable
           - peers | length > 0
         fail_msg: >-
           No peers provided. Provide via:
