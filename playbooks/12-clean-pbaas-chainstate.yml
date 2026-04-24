@@ -72,6 +72,10 @@
       changed_when: false
       failed_when: false
 
+    # WARNING: deleting blocks/ directory
+    # When bootstrapping, the old blocks/ from a previous chainstate will conflict
+    # with the bootstrap archive (different heights/checksums). Delete blocks/
+    # before bootstrapping to ensure a clean extraction.
     - name: Fail if no corrupt directories found
       ansible.builtin.fail:
         msg: |
