@@ -1,8 +1,8 @@
-# Playbook: 24-rpc-server-verify.yml
-# Purpose: Run a local curl on the remote host to check the RPC server getinfo response.
-#          Pulls credentials directly from the VRSC daemon conf — no Conf.toml needed.
-# Run with: ansible-playbook -i inventory.ini playbooks/24-rpc-server-verify.yml
-# Prereq:   VRSC daemon must be running and the RPC server container must be up.
+# Playbook: 24-rpc-server-getinfo.yml
+# Purpose: Curl the RPC server's /api/getinfo endpoint — no credentials required.
+#          The RPC server handles daemon auth internally; this checks the server itself.
+# Run with: ansible-playbook -i inventory.ini playbooks/24-rpc-server-getinfo.yml
+# Prereq:   RPC server container must be running on the remote host.
 
 ---
 - name: Verify RPC server getinfo via curl
@@ -11,50 +11,12 @@
   vars:
     rpc_port: "37486"
     rpc_url: "http://localhost:{{ rpc_port }}/api/getinfo"
-    vrsc_conf: "/home/{{ ansible_user }}/docker-verusd/mainnet/data_dir/VRSC/VRSC.conf"
 
   tasks:
-    # ── 1. Read credentials from VRSC.conf ─────────────────────────────────────
-    - name: Extract rpcuser from VRSC.conf
-      ansible.builtin.shell:
-        cmd: "python3 -c \"
-import re, sys
-c = open('{{ vrsc_conf }}').read()
-u = re.search(r'^rpcuser=(.*)', c, re.MULTILINE)
-p = re.search(r'^rpcpassword=(.*)', c, re.MULTILINE)
-if u and p:
-    print(u.group(1).strip())
-else:
-    sys.exit(1)
-\""
-      register: rpc_user
-      changed_when: false
-      failed_when: false
-
-    - name: Extract rpcpassword from VRSC.conf
-      ansible.builtin.shell:
-        cmd: "python3 -c \"
-import re, sys
-c = open('{{ vrsc_conf }}').read()
-p = re.search(r'^rpcpassword=(.*)', c, re.MULTILINE)
-if p:
-    print(p.group(1).strip())
-else:
-    sys.exit(1)
-\""
-      register: rpc_pass
-      changed_when: false
-      failed_when: false
-
-    - name: Fail if credentials not found
-      ansible.builtin.fail:
-        msg: "Could not read rpcuser/rpcpassword from {{ vrsc_conf }}"
-      when: rpc_user.rc != 0 or rpc_pass.rc != 0
-
-    # ── 2. Curl getinfo ─────────────────────────────────────────────────────────
+    # ── 1. Curl getinfo (no credentials — RPC server handles daemon auth internally) ─
     - name: Curl getinfo
       ansible.builtin.shell:
-        cmd: "curl -s -f -u '{{ rpc_user.stdout }}:{{ rpc_pass.stdout }}' '{{ rpc_url }}'"
+        cmd: "curl -s -f '{{ rpc_url }}'"
         timeout: 15
       register: getinfo_result
       changed_when: false
