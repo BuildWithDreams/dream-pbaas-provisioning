@@ -103,35 +103,35 @@
     - name: Update Conf.toml rpc_url
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
-        regexp: '^rpc_url=.*'
+        regexp: '^rpc_url\s*=\s*.*'
         replace: 'rpc_url = "http://{{ rpc_user }}:{{ rpc_pass }}@{{ vrsc_daemon_ip }}:{{ vrsc_rpc_port }}"'
       register: conf_rpc_url_updated
 
     - name: Update Conf.toml rpc_user
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
-        regexp: '^rpc_user=.*'
+        regexp: '^rpc_user\s*=\s*.*'
         replace: 'rpc_user = "{{ rpc_user }}"'
       register: conf_rpc_user_updated
 
     - name: Update Conf.toml rpc_password
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
-        regexp: '^rpc_password=.*'
+        regexp: '^rpc_password\s*=\s*.*'
         replace: 'rpc_password = "{{ rpc_pass }}"'
       register: conf_rpc_pass_updated
 
     - name: Update Conf.toml server_addr
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
-        regexp: '^server_addr=.*'
+        regexp: '^server_addr\s*=\s*.*'
         replace: 'server_addr = "{{ rpc_bind_ip }}"'
       register: conf_server_addr_updated
 
     - name: Update Conf.toml server_port
       ansible.builtin.replace:
         path: "{{ conf_toml }}"
-        regexp: '^server_port=.*'
+        regexp: '^server_port\s*=\s*.*'
         replace: 'server_port = "{{ rpc_bind_port }}"'
       register: conf_server_port_updated
 
