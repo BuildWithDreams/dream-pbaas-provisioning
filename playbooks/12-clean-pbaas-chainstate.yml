@@ -12,7 +12,7 @@
 ---
 - name: Clean PBaaS chain chainstate (preserve wallet + config)
   hosts: production
-  become: false
+  become: true
   vars:
     docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
     pbaas_chain_info:
