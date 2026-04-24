@@ -113,7 +113,7 @@
         line: "connect={{ item.host }}"
         regexp: "^connect={{ item.host }}$"
         state: present
-      loop: "{{ peers }}"
+      loop: "{{ peers | list }}"
       register: peer_lines
 
     - name: Display changes made
