@@ -22,19 +22,18 @@
   become: false
   vars:
     docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
-
-  # Map chain name → subdirectory and currencyidhex
-  # currencyidhex confirmed via getcurrency RPC on BWD VRSC mainnet container
-  pbaas_chain_info:
-    varrr:
-      subdir: pbaas/varrr
-      hex: e9e10955b7d16031e3d6f55d9c908a038e3ae47d
-    vdex:
-      subdir: pbaas/vdex
-      hex: 53fe39eea8c06bba32f1a4e20db67e5524f0309d
-    chips:
-      subdir: pbaas/chips
-      hex: f315367528394674d45277e369629605a1c3ce9f
+    # Map chain name → subdirectory and currencyidhex
+    # currencyidhex confirmed via getcurrency RPC on BWD VRSC mainnet container
+    pbaas_chain_info:
+      varrr:
+        subdir: pbaas/varrr
+        hex: e9e10955b7d16031e3d6f55d9c908a038e3ae47d
+      vdex:
+        subdir: pbaas/vdex
+        hex: 53fe39eea8c06bba32f1a4e20db67e5524f0309d
+      chips:
+        subdir: pbaas/chips
+        hex: f315367528394674d45277e369629605a1c3ce9f
 
   tasks:
     # 1. Validate pbaas_chain
@@ -137,18 +136,18 @@
       when: not target_conf_check.stat.exists | bool
 
     - name: Fill rpcuser in config
-      ansible.builtin.lineinfile:
+      ansible.builtin.replace:
         path: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
         regexp: '^(rpcuser=).*$'
-        line: '\1{{ rpcuser }}'
+        replace: "rpcuser={{ rpcuser }}"
       when: not target_conf_check.stat.exists | bool
       register: rpcuser_filled
 
     - name: Fill rpcpassword in config
-      ansible.builtin.lineinfile:
+      ansible.builtin.replace:
         path: "{{ docker_verusd_path }}/{{ chain_subdir }}/data_dir/{{ currencyid_hex }}.conf"
         regexp: '^(rpcpassword=).*$'
-        line: '\1{{ rpcpassword }}'
+        replace: "rpcpassword={{ rpcpassword }}"
       when: not target_conf_check.stat.exists | bool
       register: rpcpassword_filled
 
