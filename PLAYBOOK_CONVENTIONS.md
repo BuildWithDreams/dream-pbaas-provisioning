@@ -49,9 +49,10 @@ Applies to any chain, any /24 subnet.
 | Octet | Role |
 |-------|------|
 | `.1` | Docker gateway |
+| `.10` | caddy reverse proxy (new) |
 | `.11` | verusd daemon |
-| `.12` | RPC server (future) |
-| `.13` | block explorer (future) |
+| `.12` | RPC server |
+| `.13` | QR creator |
 | `.14` | ID verification service (future) |
 
 ---
@@ -143,3 +144,23 @@ Known IDs (confirmed on BWD):
 | `07-setup-vrsc.yml` | Copy env.sample → .env, set BOOTSTRAP_FLAG, fix IP |
 | `08-start-vrsc.yml` | `docker compose up -d` with health check |
 | `09-hygiene.yml` | Post-shutdown: confirm clean shutdown, flip bootstrap off |
+| `10-shutdown-vrsc.yml` | Gracefully stop VRSC daemon |
+| `11-setup-pbaas.yml` | Configure PBaaS chain config + generate RPC credentials |
+| `12-clean-pbaas-chainstate.yml` | Remove chainstate/blocks/database — preserve wallet + config |
+| `13-start-pbaas.yml` | Start PBaaS container with health check |
+| `14-pbaas-peer-config.yml` | Write peer data to PBaaS config |
+| `14-shutdown-pbaas.yml` | Gracefully stop PBaaS container |
+| `15-sync-status.yml` | Poll `getinfo` until blocks == longestchain |
+| `16-add-vrsc-rpc-allowip.yml` | Add CIDR to VRSC.conf rpcallowip |
+| `17-add-pbaas-rpc-allowip.yml` | Add CIDR to PBaaS.conf rpcallowip |
+| `18-wait-verify-sync.yml` | Wait + verify full sync to longestchain |
+| `20-rpc-server-clone.yml` | Clone rust_verusd_rpc_server repo |
+| `21-rpc-server-configure.yml` | Write Conf.toml with daemon URL + credentials |
+| `22-rpc-server-build.yml` | Build Docker image for RPC server |
+| `23-rpc-server-deploy.yml` | Deploy RPC server container on net-vrsc-blue (.12) |
+| `24-rpc-server-getinfo.yml` | Smoke-test RPC server via curl |
+| `25-qr-creator-clone.yml` | Clone verus-identity-qr-creator repo |
+| `26-qr-creator-configure.yml` | Write config.js + Dockerfile + docker-compose.yml |
+| `27-qr-creator-deploy.yml` | Build + deploy QR creator on net-vrsc-blue (.13) |
+| `28-caddy-deploy.yml` | Deploy Caddy reverse proxy + Lets Encrypt on net-vrsc-blue (.10) |
+| `29-caddy-teardown.yml` | Remove Caddy container, compose project, and data |
