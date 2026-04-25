@@ -62,13 +62,11 @@
         content: |
           {
             email {{ caddy_letsencrypt_email }}
-            on_demand_tls {
-              issue ecdsa
-            }
           }
 
-          rpc.{{ caddy_domain }} {
+          rpc.vrsc.{{ caddy_domain }} {
             reverse_proxy {{ rpc_upstream }}
+            tls {{ caddy_letsencrypt_email }}
             log {
               output file /data/access.log
             }
@@ -76,6 +74,7 @@
 
           qrcodes.{{ caddy_domain }} {
             reverse_proxy {{ qr_upstream }}
+            tls {{ caddy_letsencrypt_email }}
             log {
               output file /data/access.log
             }
@@ -95,11 +94,10 @@
       ansible.builtin.copy:
         content: |
           # docker-compose.yml — Caddy reverse proxy (mains_blue)
-          version: "3.9"
 
           services:
             caddy:
-              image: caddy:3
+              image: caddy:2
               container_name: {{ container_name }}
               hostname: caddy
               ports:
@@ -176,7 +174,7 @@
             network    → {{ docker_network }}
             IP         → {{ caddy_bind_ip }}
             ports      → 80 (HTTP), 443 (HTTPS)
-            RPC route  → https://rpc.{{ caddy_domain }}
+            RPC route  → https://rpc.vrsc.{{ caddy_domain }}
             QR route   → https://qrcodes.{{ caddy_domain }}
             Caddyfile  → {{ caddy_path }}/Caddyfile
 
@@ -186,6 +184,5 @@
 
           Verify with:
             ssh <host> "docker ps | grep caddy"
-            ssh <host> "docker exec {{ container_name }} caddy list-certificates"
-            curl -I https://rpc.{{ caddy_domain }}
+            curl -I https://rpc.vrsc.{{ caddy_domain }}
             curl -I https://qrcodes.{{ caddy_domain }}
