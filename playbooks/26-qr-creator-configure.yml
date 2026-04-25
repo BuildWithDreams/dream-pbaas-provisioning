@@ -99,6 +99,7 @@
           COPY .yarn .yarn/
           COPY .yarnrc.yml ./
           COPY tsconfig.json ./
+          COPY config.js ./
           COPY src/ ./src/
           COPY views/ ./views/
           COPY public/ ./public/
