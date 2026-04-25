@@ -1,0 +1,177 @@
+# Playbook: 26-qr-creator-configure.yml
+# Purpose: Configure config.js, Dockerfile, and docker-compose.yml for the QR creator
+# Run with: ansible-playbook -i inventory.ini playbooks/26-qr-creator-configure.yml
+# Requires: 25-qr-creator-clone.yml (repo must be cloned first)
+# Idempotent: safe to re-run — replace tasks update existing values in place.
+
+---
+- name: Configure verus-identity-qr-creator
+  hosts: production
+  become: false
+  vars:
+    qr_repo_path: "/home/{{ ansible_user }}/verus-identity-qr-creator"
+    config_js: "{{ qr_repo_path }}/config.js"
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    vrsc_conf: "{{ docker_verusd_path }}/mainnet/data_dir/VRSC.conf"
+    vrsc_daemon_ip: "10.201.0.11"
+    vrsc_rpc_port: "27486"
+    qr_bind_ip: "10.201.0.13"
+    qr_host_port: "3000"
+    qr_internal_port: "3000"
+    image_name: "buildwithdreams/verus-qr-creator"
+    compose_project: "mains_blue_qr"
+    container_name: "{{ compose_project }}-qr-1"
+    docker_network: "net-vrsc-blue"
+
+  tasks:
+    # ── 1. Verify repo was cloned ─────────────────────────────────────────────
+    - name: Verify QR creator repo exists
+      ansible.builtin.stat:
+        path: "{{ qr_repo_path }}"
+      register: qr_repo_stat
+      failed_when: not qr_repo_stat.stat.exists
+
+    # ── 2. Read VRSC.conf credentials ──────────────────────────────────────────
+    - name: Read rpcuser from VRSC.conf
+      ansible.builtin.shell:
+        cmd: "grep '^rpcuser=' {{ vrsc_conf }} 2>/dev/null | head -1 | cut -d= -f2 || echo ''"
+      register: vrsc_rpcuser
+      changed_when: false
+      failed_when: false
+
+    - name: Read rpcpassword from VRSC.conf
+      ansible.builtin.shell:
+        cmd: "grep '^rpcpassword=' {{ vrsc_conf }} 2>/dev/null | head -1 | cut -d= -f2 || echo ''"
+      register: vrsc_rpcpass
+      changed_when: false
+      failed_when: false
+
+    - name: Display credential source
+      ansible.builtin.debug:
+        msg: "Using VRSC.conf credentials → user={{ vrsc_rpcuser.stdout | trim }}"
+
+    # ── 3. Update config.js ─────────────────────────────────────────────────────
+    - name: Update config.js RPC_HOST
+      ansible.builtin.replace:
+        path: "{{ config_js }}"
+        regexp: 'RPC_HOST:\s*"[^"]*"'
+        replace: 'RPC_HOST: "{{ vrsc_daemon_ip }}"'
+
+    - name: Update config.js RPC_PORT
+      ansible.builtin.replace:
+        path: "{{ config_js }}"
+        regexp: 'RPC_PORT:\s*[0-9]+'
+        replace: 'RPC_PORT: {{ vrsc_rpc_port }}'
+
+    - name: Update config.js RPC_USER
+      ansible.builtin.replace:
+        path: "{{ config_js }}"
+        regexp: 'RPC_USER:\s*"[^"]*"'
+        replace: 'RPC_USER: "{{ vrsc_rpcuser.stdout | trim }}"'
+
+    - name: Update config.js RPC_PASSWORD
+      ansible.builtin.replace:
+        path: "{{ config_js }}"
+        regexp: 'RPC_PASSWORD:\s*"[^"]*"'
+        replace: 'RPC_PASSWORD: "{{ vrsc_rpcpass.stdout | trim }}"'
+
+    - name: Display config summary
+      ansible.builtin.debug:
+        msg: |
+          config.js updated:
+            RPC_HOST     → {{ vrsc_daemon_ip }}
+            RPC_PORT     → {{ vrsc_rpc_port }}
+            RPC_USER     → {{ vrsc_rpcuser.stdout | trim }}
+            RPC_PASSWORD → [redacted]
+
+    # ── 4. Write Dockerfile ────────────────────────────────────────────────────
+    - name: Write Dockerfile
+      ansible.builtin.copy:
+        content: |
+          # Stage 1: Build the TypeScript project
+          FROM node:20-alpine AS builder
+          WORKDIR /build
+
+          # Install git (required for yarn to fetch git:// dependencies)
+          RUN apk add --no-cache git
+
+          COPY package.json yarn.lock ./
+          COPY .yarn .yarn/
+          COPY .yarnrc.yml ./
+          COPY tsconfig.json ./
+          COPY src/ ./src/
+          COPY views/ ./views/
+          COPY public/ ./public/
+          COPY decs.d.ts ./
+          RUN corepack enable && yarn install --immutable --network-timeout 100000 && yarn build
+
+          # Stage 2: Minimal runtime image
+          FROM node:20-alpine
+          WORKDIR /app
+          # Install canvas dependencies for qrcode (optional but common)
+          RUN apk add --no-cache python3 make g++ ca-certificates
+          COPY --from=builder /build/dist/ ./dist/
+          COPY --from=builder /build/node_modules/ ./node_modules/
+          COPY --from=builder /build/views/ ./views/
+          COPY --from=builder /build/public/ ./public/
+          COPY --from=builder /build/package.json ./
+          COPY --from=builder /build/.yarnrc.yml ./
+          COPY --from=builder /build/decs.d.ts ./
+          EXPOSE {{ qr_internal_port }}
+          # Run using node directly (ui script from package.json)
+          CMD ["node", "dist/server.js"]
+        dest: "{{ qr_repo_path }}/Dockerfile"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    # ── 5. Write docker-compose.yml ────────────────────────────────────────────
+    - name: Write docker-compose.yml
+      ansible.builtin.copy:
+        content: |
+          # docker-compose.yml — Verus Identity QR Creator (mains_blue)
+          version: "3.9"
+
+          services:
+            qr-creator:
+              image: {{ image_name }}:local
+              container_name: {{ container_name }}
+              hostname: verus-qr-creator
+              ports:
+                - "127.0.0.1:{{ qr_host_port }}:{{ qr_internal_port }}"
+              networks:
+                pbaas_network:
+                  ipv4_address: {{ qr_bind_ip }}
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "wget", "-qO-", "http://localhost:{{ qr_internal_port }}/"]
+                interval: "30s"
+                timeout: "10s"
+                retries: 3
+                start_period: "15s"
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+
+          networks:
+            pbaas_network:
+              name: {{ docker_network }}
+              external: true
+        dest: "{{ qr_repo_path }}/docker-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg: |
+          QR Creator configured:
+            repo path     → {{ qr_repo_path }}
+            compose file  → {{ qr_repo_path }}/docker-compose.yml
+            image         → {{ image_name }}:local
+            container     → {{ container_name }}
+            network       → {{ docker_network }}
+            IP            → {{ qr_bind_ip }}
+            port          → localhost:{{ qr_host_port }} → {{ qr_internal_port }}

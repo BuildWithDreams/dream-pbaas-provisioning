@@ -1,0 +1,39 @@
+# Playbook: 25-qr-creator-clone.yml
+# Purpose: Clone the verus-identity-update-qr-creator repository
+# Run with: ansible-playbook -i inventory.ini playbooks/25-qr-creator-clone.yml
+# Idempotent: skips if /home/{{ ansible_user }}/verus-identity-qr-creator already exists
+
+---
+- name: Clone verus-identity-qr-creator repository
+  hosts: production
+  become: false
+  vars:
+    qr_repo_url: "https://github.com/BuildWithDreams/verus-identity-update-qr-creator-main.git"
+    qr_repo_path: "/home/{{ ansible_user }}/verus-identity-qr-creator"
+    qr_branch: "feature/qrcodes"
+
+  tasks:
+    - name: Check if QR creator directory already exists
+      ansible.builtin.stat:
+        path: "{{ qr_repo_path }}"
+      register: qr_dir_stat
+
+    - name: Display clone plan
+      ansible.builtin.debug:
+        msg: >
+          Clone {{ qr_repo_url }} (branch {{ qr_branch }}) to {{ qr_repo_path }}.
+          {{ 'Directory exists — will pull latest.' if qr_dir_stat.stat.exists else 'Will clone fresh.' }}
+
+    - name: Clone or update repository
+      ansible.builtin.git:
+        repo: "{{ qr_repo_url }}"
+        dest: "{{ qr_repo_path }}"
+        clone: "{{ not qr_dir_stat.stat.exists }}"
+        update: true
+        accept_hostkey: true
+        version: "{{ qr_branch }}"
+      register: clone_result
+
+    - name: Display clone status
+      ansible.builtin.debug:
+        msg: "{{ 'Cloned repository (branch {{ qr_branch }})' if clone_result.changed else 'Repository already up-to-date on branch {{ qr_branch }}' }}"
