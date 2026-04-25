@@ -1,0 +1,188 @@
+# Playbook: 28-caddy-deploy.yml
+# Purpose: Deploy Caddy reverse proxy on net-vrsc-blue with Lets Encrypt TLS.
+#          Routes: rpc.vrsc.<domain> -> RPC server
+#                  qrcodes.<domain>  -> QR creator
+# Run with: ansible-playbook -i inventory.ini playbooks/28-caddy-deploy.yml
+#           -e caddy_letsencrypt_email=you@example.com
+#           -e caddy_domain=buildwithdreams.com
+# Requires: Docker and net-vrsc-blue network already present
+# Idempotent: safe to re-run — stops and recreates container each time
+---
+- name: Deploy Caddy reverse proxy
+  hosts: production
+  become: false
+  vars:
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    compose_project: "mains_blue_caddy"
+    container_name: "{{ compose_project }}-caddy-1"
+    docker_network: "net-vrsc-blue"
+    caddy_bind_ip: "10.201.0.10"
+    # Upstream services — these must match the actual deployed containers
+    rpc_upstream: "10.201.0.12:37486"
+    qr_upstream: "10.201.0.13:3000"
+
+  tasks:
+    # ── 1. Validate required parameters ─────────────────────────────────────────
+    - name: Require letsencrypt email
+      ansible.builtin.assert:
+        that:
+          - caddy_letsencrypt_email is defined
+          - caddy_letsencrypt_email | length > 0
+        fail_msg: "caddy_letsencrypt_email must be provided via -e"
+        success_msg: "caddy_letsencrypt_email validated"
+
+    - name: Require domain
+      ansible.builtin.assert:
+        that:
+          - caddy_domain is defined
+          - caddy_domain | length > 0
+        fail_msg: "caddy_domain must be provided via -e"
+        success_msg: "caddy_domain validated"
+
+    # ── 2. Ensure caddy directory exists ────────────────────────────────────────
+    - name: Ensure caddy directory exists
+      ansible.builtin.file:
+        path: "{{ caddy_path }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Ensure caddy data directory exists
+      ansible.builtin.file:
+        path: "{{ caddy_path }}/data"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    # ── 3. Write Caddyfile ──────────────────────────────────────────────────────
+    - name: Write Caddyfile
+      ansible.builtin.copy:
+        content: |
+          {
+            email {{ caddy_letsencrypt_email }}
+          }
+
+          rpc.vrsc.{{ caddy_domain }} {
+            reverse_proxy {{ rpc_upstream }}
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+
+          qrcodes.{{ caddy_domain }} {
+            reverse_proxy {{ qr_upstream }}
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+        dest: "{{ caddy_path }}/Caddyfile"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: caddyfile_written
+
+    - name: Display Caddyfile status
+      ansible.builtin.debug:
+        msg: "Caddyfile written to {{ caddy_path }}/Caddyfile"
+
+    # ── 4. Write docker-compose.yml ──────────────────────────────────────────────
+    - name: Write docker-compose.yml
+      ansible.builtin.copy:
+        content: |
+          # docker-compose.yml — Caddy reverse proxy (mains_blue)
+
+          services:
+            caddy:
+              image: caddy:2
+              container_name: {{ container_name }}
+              hostname: caddy
+              ports:
+                - "80:80"
+                - "443:443"
+              networks:
+                pbaas_network:
+                  ipv4_address: {{ caddy_bind_ip }}
+              volumes:
+                - ./Caddyfile:/etc/caddy/Caddyfile:ro
+                - ./data:/data
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "caddy", "health"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+                start_period: 10s
+              logging:
+                driver: json-file
+                options:
+                  max-size: 10m
+                  max-file: "3"
+
+          networks:
+            pbaas_network:
+              name: {{ docker_network }}
+              external: true
+        dest: "{{ caddy_path }}/docker-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: compose_written
+
+    - name: Display compose file status
+      ansible.builtin.debug:
+        msg: "docker-compose.yml written to {{ caddy_path }}/docker-compose.yml"
+
+    # ── 5. Stop existing Caddy container if present ─────────────────────────────
+    - name: Stop and remove existing Caddy container
+      ansible.builtin.shell:
+        cmd: "docker rm -f {{ container_name }} 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 6. Deploy with docker compose ───────────────────────────────────────────
+    - name: Start Caddy container
+      ansible.builtin.shell:
+        cmd: "timeout 120 docker compose -f {{ caddy_path }}/docker-compose.yml -p {{ compose_project }} up -d --force-recreate"
+      register: compose_up
+      changed_when: true
+
+    - name: Display deploy result
+      ansible.builtin.debug:
+        msg: "Container {{ container_name }} started: {{ compose_up.stdout_lines | join(' ') }}"
+
+    # ── 7. Wait for container to be running ─────────────────────────────────────
+    - name: Verify container is running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || true"
+      register: running_verify
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: running_verify.stdout | length > 0
+      failed_when: false
+
+    # ── 8. Display deployment summary ────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          Caddy deployed:
+            container  → {{ container_name }}
+            network    → {{ docker_network }}
+            IP         → {{ caddy_bind_ip }}
+            ports      → 80 (HTTP), 443 (HTTPS)
+            RPC route  → https://rpc.vrsc.{{ caddy_domain }}
+            QR route   → https://qrcodes.{{ caddy_domain }}
+            Caddyfile  → {{ caddy_path }}/Caddyfile
+
+          DNS prerequisite — ensure these A records point to the server:
+            rpc.vrsc   → <server IP>
+            qrcodes    → <server IP>
+
+          Verify with:
+            ssh <host> "docker ps | grep caddy"
+            curl -I https://rpc.vrsc.{{ caddy_domain }}
+            curl -I https://qrcodes.{{ caddy_domain }}

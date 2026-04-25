@@ -1,0 +1,60 @@
+# Playbook: 29-caddy-teardown.yml
+# Purpose: Remove the Caddy container and its compose project.
+# Run with: ansible-playbook -i inventory.ini playbooks/29-caddy-teardown.yml
+# Idempotent: safe to run even if Caddy is not deployed
+---
+- name: Teardown Caddy reverse proxy
+  hosts: production
+  become: false
+  vars:
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    compose_project: "mains_blue_caddy"
+    container_name: "{{ compose_project }}-caddy-1"
+
+  tasks:
+    # ── 1. Stop and remove Caddy container ─────────────────────────────────────
+    - name: Stop and remove Caddy container
+      ansible.builtin.shell:
+        cmd: "docker rm -f {{ container_name }} 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 2. Stop compose project (removes containers, networks created by compose) ─
+    - name: Stop compose project
+      ansible.builtin.shell:
+        cmd: "docker compose -f {{ caddy_path }}/docker-compose.yml -p {{ compose_project }} down 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 3. Remove Caddyfiles and data ───────────────────────────────────────────
+    - name: Remove Caddyfile
+      ansible.builtin.file:
+        path: "{{ caddy_path }}/Caddyfile"
+        state: absent
+      changed_when: true
+      failed_when: false
+
+    - name: Remove caddy data directory
+      ansible.builtin.file:
+        path: "{{ caddy_path }}/data"
+        state: absent
+      changed_when: true
+      failed_when: false
+
+    # ── 4. Verify container is gone ──────────────────────────────────────────────
+    - name: Verify container is removed
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || echo 'not running'"
+      register: container_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display teardown status
+      ansible.builtin.debug:
+        msg: |
+          {% if container_check.stdout == 'not running' %}
+          Caddy teardown complete — container removed.
+          {% else %}
+          Caddy teardown: container may still be present — check manually.
+          {% endif %}
+          Caddyfiles and data directory removed from {{ caddy_path }}.
