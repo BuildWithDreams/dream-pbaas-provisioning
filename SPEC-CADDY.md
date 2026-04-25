@@ -4,8 +4,8 @@
 
 The BWD stack has two HTTP services that need to be exposed publicly with TLS:
 
-- **RPC server** — Verus RPC, bound to `10.201.0.12:37486` on `net-vrsc-blue`
-- **QR creator** — Node.js web app, bound to `10.201.0.13:3000` on `net-vrsc-blue`
+- **RPC server** — Verus RPC, bound to `{{ vrsc_rpc_bind_ip }}:37486` on `net-vrsc-blue`
+- **QR creator** — Node.js web app, bound to `{{ qr_creator_bind_ip }}:3000` on `net-vrsc-blue`
 
 Both currently bind to `127.0.0.1` (localhost only) and are not accessible externally. They need to be reachable via `https://rpc.vrsc.buildwithdreams.com` and `https://qrcodes.buildwithdreams.com` with automatic Lets Encrypt certificates.
 
@@ -26,15 +26,15 @@ Caddy is chosen over nginx because:
 | Compose project | `mains_blue_caddy` |
 | Container name | `mains_blue_caddy-caddy-1` |
 | Docker network | `net-vrsc-blue` (external, existing) |
-| Bind IP | `10.201.0.10` |
+| Bind IP | `{{ caddy_bind_ip }}` |
 | Published port | `443` (HTTPS), `80` (HTTP → redirect) |
 
 ### 2.2 Routing Table
 
 | Public URL | Upstream | Notes |
 |-----------|----------|-------|
-| `https://rpc.vrsc.buildwithdreams.com` | `http://10.201.0.12:37486` | VRSC RPC server |
-| `https://qrcodes.buildwithdreams.com` | `http://10.201.0.13:3000` | QR creator web app |
+| `https://rpc.vrsc.buildwithdreams.com` | `http://{{ vrsc_rpc_bind_ip }}:37486` | VRSC RPC server |
+| `https://qrcodes.buildwithdreams.com` | `http://{{ qr_creator_bind_ip }}:3000` | QR creator web app |
 
 ### 2.3 Sensitive Variables
 
@@ -57,14 +57,14 @@ These values are **per-deployment** and must **never be committed**:
 }
 
 rpc.{$CADDY_DOMAIN} {
-  reverse_proxy 10.201.0.12:37486
+  reverse_proxy {{ vrsc_rpc_bind_ip }}:37486
   log {
     output file /data/access.log
   }
 }
 
 qrcodes.{$CADDY_DOMAIN} {
-  reverse_proxy 10.201.0.13:3000
+  reverse_proxy {{ qr_creator_bind_ip }}:3000
   log {
     output file /data/access.log
   }
@@ -94,7 +94,7 @@ The `on_demand_tls` block enables automatic certificate issuance for any subdoma
 
 1. Read `caddy_letsencrypt_email` and `caddy_domain` from playbook args (user provides at runtime, or reads from `group_vars/production-local.yml` if available)
 2. Write `Caddyfile` to `caddy_path/` using template with domain variables
-3. Write `docker-compose.yml` for Caddy (project `mains_blue_caddy`, network `net-vrsc-blue`, IP `10.201.0.10`, ports `80` and `443`)
+3. Write `docker-compose.yml` for Caddy (project `mains_blue_caddy`, network `net-vrsc-blue`, IP `{{ caddy_bind_ip }}`, ports `80` and `443`)
 4. Stop any existing Caddy container (idempotent)
 5. Start Caddy via `docker compose`
 6. Wait for container to be healthy
@@ -198,7 +198,7 @@ This section documents where key service parameters are defined, for reference w
 **RPC Server** (`playbooks/21-rpc-server-configure.yml`, `playbooks/23-rpc-server-deploy.yml`):
 - Repo path: `/home/dream-hermes-agent/rust_verusd_rpc_server`
 - Container: `mains_blue_rpc-rpc-1`
-- Bind IP: `10.201.0.12`
+- Bind IP: `{{ vrsc_rpc_bind_ip }}`
 - Bind port: `37486`
 - Docker network: `net-vrsc-blue`
 - Compose project: `mains_blue_rpc`
@@ -206,7 +206,7 @@ This section documents where key service parameters are defined, for reference w
 **QR Creator** (`playbooks/26-qr-creator-configure.yml`, `playbooks/27-qr-creator-deploy.yml`):
 - Repo path: `/home/dream-hermes-agent/verus-identity-qr-creator`
 - Container: `mains_blue_qr-qr-1`
-- Bind IP: `10.201.0.13`
+- Bind IP: `{{ qr_creator_bind_ip }}`
 - Host port: `3000` (localhost only)
 - Docker network: `net-vrsc-blue`
 - Compose project: `mains_blue_qr`
@@ -214,7 +214,7 @@ This section documents where key service parameters are defined, for reference w
 **VRSC Mainnet** (`playbooks/07-setup-vrsc.yml`, `playbooks/08-start-vrsc.yml`):
 - Repo path: `/home/dream-hermes-agent/docker-verusd/mainnet`
 - Container: `mains_blue-vrsc-1`
-- Bind IP: `10.201.0.11`
+- Bind IP: `{{ vrsc_mainnet_bind_ip }}`
 - RPC port: `27486`
 - Docker network: `net-vrsc-blue`
 - Compose project: `mains_blue`
