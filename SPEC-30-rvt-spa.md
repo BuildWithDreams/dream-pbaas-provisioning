@@ -127,8 +127,8 @@ This must be done before playbook 32 can work. See feedback item below.
 - [x] DNS updated ✅
 - [x] Use Caddy alpine node to build ✅
 - [x] Use existing Caddy to serve static files ✅
-- [ ] **Caddy volume:** Caddy container needs `~/rvt/dist` bind-mounted. Requires updating playbook 28 to add the volume before playbook 32 will work. **Decision: Option A (bind mount in Caddy compose)**. This is a prerequisite.
-- [ ] SPA routing Caddy config (`try_files {path} /index.html`) is included in the new route block per the template above.
+- [x] **Caddy volume:** Playbook 28 patched to add `~/rvt/dist:/srv/rvt/dist:ro` to Caddy compose template ✅ — no action needed, prerequisite resolved.
+- [x] SPA routing Caddy config (`try_files {path} /index.html`) is included in the new route block per the template above ✅
 
 ---
 

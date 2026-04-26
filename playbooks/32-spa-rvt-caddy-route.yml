@@ -1,0 +1,105 @@
+# Playbook: 32-spa-rvt-caddy-route.yml
+# Purpose: Add rvt.buildwithdreams.com route to the existing Caddyfile and reload Caddy.
+#          Serves ~/rvt/dist via Caddy file_server with SPA routing (try_files).
+# Run with: ansible-playbook -i inventory.ini playbooks/32-spa-rvt-caddy-route.yml
+# Requires: 31-spa-rvt-build.yml (dist/ must exist); Caddy container running
+# Idempotent: safe to re-run — route block appended only if not already present.
+---
+- name: Add RVT SPA Caddy route
+  hosts: production
+  become: false
+  vars:
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    rvt_path: "/home/{{ ansible_user }}/rvt"
+    rvt_domain: "rvt.buildwithdreams.com"
+
+  tasks:
+    # ── 1. Validate dist/ exists ────────────────────────────────────────────────
+    - name: Verify rvt dist directory exists
+      ansible.builtin.stat:
+        path: "{{ rvt_path }}/dist"
+      register: dist_stat
+      failed_when: not dist_stat.stat.exists
+
+    # ── 2. Validate Caddyfile exists ────────────────────────────────────────────
+    - name: Verify Caddyfile exists
+      ansible.builtin.stat:
+        path: "{{ caddy_path }}/Caddyfile"
+      register: caddyfile_stat
+      failed_when: not caddyfile_stat.stat.exists
+
+    # ── 3. Check if route already exists ───────────────────────────────────────
+    - name: Check if rvt route already in Caddyfile
+      ansible.builtin.shell:
+        cmd: "grep -q 'rvt.buildwithdreams.com' {{ caddy_path }}/Caddyfile && echo 'present' || echo 'absent'"
+      register: route_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display route status
+      ansible.builtin.debug:
+        msg: "RVT route in Caddyfile: {{ route_check.stdout }}"
+
+    # ── 4. Append route block if not present ────────────────────────────────────
+    - name: Append rvt route to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK — rvt.buildwithdreams.com"
+        content: |
+          {{ rvt_domain }} {
+            root * {{ rvt_path }}/dist
+            file_server
+            try_files {path} /index.html
+            log {
+              output file /data/access.log
+            }
+          }
+      register: caddyfile_updated
+      when: route_check.stdout == 'absent'
+
+    - name: Display Caddyfile update result
+      ansible.builtin.debug:
+        msg: "Caddyfile updated — rvt route block {{ 'added' if caddyfile_updated.changed else 'already present' }}"
+      when: route_check.stdout == 'absent'
+
+    # ── 5. Verify Caddyfile is valid before reload ─────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /etc/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      failed_when: false
+      changed_when: false
+      when: route_check.stdout == 'absent'
+
+    - name: Abort if Caddyfile invalid
+      ansible.builtin.fail:
+        msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
+      when: route_check.stdout == 'absent' and caddy_validate.rc != 0
+
+    # ── 6. Reload Caddy ─────────────────────────────────────────────────────────
+    - name: Reload Caddy to apply new route
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /etc/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      failed_when: false
+      changed_when: true
+      when: route_check.stdout == 'absent'
+
+    - name: Display reload result
+      ansible.builtin.debug:
+        msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
+      when: route_check.stdout == 'absent'
+
+    # ── 7. Summary ──────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          RVT SPA deployed:
+            URL      → https://{{ rvt_domain }}
+            Source   → {{ rvt_path }}/dist
+            Route    → file_server + try_files {path} /index.html
+            TLS      → Automatic via Let's Encrypt
+
+          Verify:
+            curl -I https://{{ rvt_domain }}

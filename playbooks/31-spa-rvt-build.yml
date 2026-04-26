@@ -1,0 +1,55 @@
+# Playbook: 31-spa-rvt-build.yml
+# Purpose: Build the RVT Vue SPA with Vite inside a node:alpine container.
+#          Output (dist/) lands on the host at ~/rvt/dist/
+# Run with: ansible-playbook -i inventory.ini playbooks/31-spa-rvt-build.yml
+# Requires: 30-spa-rvt-clone.yml (repo must be cloned)
+# Note: Always runs build — Vite is fast and stale output detection is unreliable.
+---
+- name: Build RVT Vue SPA
+  hosts: production
+  become: false
+  vars:
+    rvt_path: "/home/{{ ansible_user }}/rvt"
+
+  tasks:
+    - name: Verify rvt directory exists
+      ansible.builtin.stat:
+        path: "{{ rvt_path }}"
+      register: rvt_dir_stat
+      failed_when: not rvt_dir_stat.stat.exists
+
+    - name: Verify package.json exists
+      ansible.builtin.stat:
+        path: "{{ rvt_path }}/package.json"
+      register: package_json_stat
+      failed_when: not package_json_stat.stat.exists
+
+    - name: Display build start
+      ansible.builtin.debug:
+        msg: "Building RVT SPA from {{ rvt_path }}/dist — node:alpine container"
+
+    - name: Run vite build inside node:alpine container
+      ansible.builtin.shell:
+        cmd: >
+          docker run --rm
+          -v {{ rvt_path }}:/srv/app
+          -w /srv/app
+          node:alpine
+          sh -c "npm install --silent && npm run build"
+      register: build_result
+      changed_when: true
+      failed_when: false
+
+    - name: Verify dist directory was created
+      ansible.builtin.stat:
+        path: "{{ rvt_path }}/dist"
+      register: dist_stat
+
+    - name: Fail if dist not created
+      ansible.builtin.fail:
+        msg: "Build failed — {{ rvt_path }}/dist was not created. Check build output above."
+      when: not dist_stat.stat.exists
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg: "Build complete — dist/ created at {{ rvt_path }}/dist"
