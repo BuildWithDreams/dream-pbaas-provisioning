@@ -7,6 +7,8 @@
 #           -e caddy_domain=buildwithdreams.com
 # Requires: Docker and net-vrsc-blue network already present
 # Idempotent: safe to re-run — stops and recreates container each time
+# Note: caddy:2 image has /etc/caddy/ as a directory, so we mount the parent dir
+#       to /config/caddy and override CMD to use it. See issue #17.
 ---
 - name: Deploy Caddy reverse proxy
   hosts: production
@@ -56,21 +58,13 @@
         group: "{{ ansible_user }}"
         mode: '0755'
 
-    # ── 3. Write Caddyfile (idempotent — preserve existing managed blocks) ─────────
+    # ── 3. Write Caddyfile (idempotent — preserve existing ANSIBLE MANAGED BLOCKs) ──
     - name: Check if Caddyfile already exists
       ansible.builtin.stat:
         path: "{{ caddy_path }}/Caddyfile"
       register: caddyfile_exists_stat
 
-    - name: Read existing Caddyfile if present
-      ansible.builtin.shell:
-        cmd: "cat {{ caddy_path }}/Caddyfile"
-      register: existing_caddyfile
-      failed_when: false
-      changed_when: false
-      when: caddyfile_exists_stat.stat.exists
-
-    - name: Write Caddyfile base template
+    - name: Write Caddyfile base template (fresh)
       ansible.builtin.copy:
         content: |
           {
@@ -92,15 +86,14 @@
               output file /data/access.log
             }
           }
-
-      dest: "{{ caddy_path }}/Caddyfile"
-      owner: "{{ ansible_user }}"
-      group: "{{ ansible_user }}"
-      mode: '0644'
+        dest: "{{ caddy_path }}/Caddyfile"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
       when: not caddyfile_exists_stat.stat.exists
       register: caddyfile_written
 
-    - name: Append existing managed blocks to base Caddyfile
+    - name: Rebuild Caddyfile preserving managed blocks
       ansible.builtin.shell:
         cmd: |
           BASE=$(mktemp)
@@ -124,10 +117,10 @@
               output file /data/access.log
             }
           }
+
           BASEFILE
           # Append any existing ANSIBLE MANAGED BLOCKs
           if grep -q 'ANSIBLE MANAGED BLOCK' {{ caddy_path }}/Caddyfile; then
-            # Extract existing managed blocks (lines between BEGIN and END markers)
             awk '/# BEGIN ANSIBLE MANAGED BLOCK/,/# END ANSIBLE MANAGED BLOCK/' {{ caddy_path }}/Caddyfile >> "$BASE"
           fi
           mv "$BASE" {{ caddy_path }}/Caddyfile
@@ -137,9 +130,12 @@
 
     - name: Display Caddyfile status
       ansible.builtin.debug:
-        msg: "Caddyfile written to {{ caddy_path }}/Caddyfile"
+        msg: "Caddyfile {{ 'written fresh' if caddyfile_written.changed else 'rebuilt with managed blocks' if caddyfile_updated.changed else 'unchanged' }}"
 
     # ── 4. Write docker-compose.yml ──────────────────────────────────────────────
+    # Note: caddy:2 image has /etc/caddy/ as a directory, so we mount the parent
+    # dir to /config/caddy (absolute path required — relative ./Caddyfile silently
+    # fails when the target is a directory in the image). See issue #17.
     - name: Write docker-compose.yml
       ansible.builtin.copy:
         content: |
@@ -229,10 +225,6 @@
             RPC route  → https://rpc.vrsc.{{ caddy_domain }}
             QR route   → https://qrcodes.{{ caddy_domain }}
             Caddyfile  → {{ caddy_path }}/Caddyfile
-
-          DNS prerequisite — ensure these A records point to the server:
-            rpc.vrsc   → <server IP>
-            qrcodes    → <server IP>
 
           Verify with:
             ssh <host> "docker ps | grep caddy"

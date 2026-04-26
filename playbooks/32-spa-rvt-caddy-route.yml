@@ -1,9 +1,9 @@
 # Playbook: 32-spa-rvt-caddy-route.yml
 # Purpose: Add rvt.buildwithdreams.com route to the existing Caddyfile and reload Caddy.
-#          Serves ~/rvt/dist via Caddy file_server with SPA routing (try_files).
+#          Serves ~/rvt/build via Caddy file_server with SPA routing (try_files).
 # Run with: ansible-playbook -i inventory.ini playbooks/32-spa-rvt-caddy-route.yml
-# Requires: 31-spa-rvt-build.yml (dist/ must exist); Caddy container running
-# Idempotent: safe to re-run — route block appended only if not already present.
+# Requires: 31-spa-rvt-build.yml (build/ must exist); Caddy container running
+# Idempotent: safe to re-run — route block present on subsequent runs.
 ---
 - name: Add RVT SPA Caddy route
   hosts: production
@@ -12,10 +12,11 @@
     caddy_path: "/home/{{ ansible_user }}/caddy"
     caddy_container: "mains_blue_caddy-caddy-1"
     rvt_path: "/home/{{ ansible_user }}/rvt"
+    rvt_container_root: "/srv/rvt/dist"
     rvt_domain: "rvt.buildwithdreams.com"
 
   tasks:
-    # ── 1. Validate dist/ exists ────────────────────────────────────────────────
+    # ── 1. Validate build/ exists ────────────────────────────────────────────────
     - name: Verify rvt build directory exists
       ansible.builtin.stat:
         path: "{{ rvt_path }}/build"
@@ -47,15 +48,15 @@
         path: "{{ caddy_path }}/Caddyfile"
         marker: "# {mark} ANSIBLE MANAGED BLOCK — rvt.buildwithdreams.com"
         content: |
-rvt.buildwithdreams.com {
-  root * /home/dream-hermes-agent/rvt/build
-  file_server
-  try_files {path} /index.html
-  tls hermesreport@verus.trading
-  log {
-    output file /data/access.log
-  }
-}
+          rvt.buildwithdreams.com {
+            root * {{ rvt_container_root }}
+            file_server
+            try_files {path} /index.html
+            tls hermesreport@verus.trading
+            log {
+              output file /data/access.log
+            }
+          }
       register: caddyfile_updated
       when: route_check.stdout == 'absent'
 
@@ -67,30 +68,27 @@ rvt.buildwithdreams.com {
     # ── 5. Verify Caddyfile is valid before reload ─────────────────────────────
     - name: Validate Caddyfile syntax
       ansible.builtin.shell:
-        cmd: "docker exec {{ caddy_container }} caddy validate --config /etc/caddy/Caddyfile 2>&1"
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
       register: caddy_validate
       failed_when: false
       changed_when: false
-      when: route_check.stdout == 'absent'
 
     - name: Abort if Caddyfile invalid
       ansible.builtin.fail:
         msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
-      when: route_check.stdout == 'absent' and caddy_validate.rc != 0
+      when: caddy_validate.rc != 0
 
     # ── 6. Reload Caddy ─────────────────────────────────────────────────────────
     - name: Reload Caddy to apply new route
       ansible.builtin.shell:
-        cmd: "docker exec {{ caddy_container }} caddy reload --config /etc/caddy/Caddyfile 2>&1"
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
       register: caddy_reload
       failed_when: false
       changed_when: true
-      when: route_check.stdout == 'absent'
 
     - name: Display reload result
       ansible.builtin.debug:
         msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
-      when: route_check.stdout == 'absent'
 
     # ── 7. Summary ──────────────────────────────────────────────────────────────
     - name: Display deployment summary
@@ -98,7 +96,7 @@ rvt.buildwithdreams.com {
         msg: |
           RVT SPA deployed:
             URL      → https://{{ rvt_domain }}
-            Source   → {{ rvt_path }}/dist
+            Source   → {{ rvt_container_root }} (container path)
             Route    → file_server + try_files {path} /index.html
             TLS      → Automatic via Let's Encrypt
 
