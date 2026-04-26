@@ -62,7 +62,7 @@ rvt.buildwithdreams.com {
 }
 ```
 
-Note: Caddy serves from `/srv/rvt/dist` inside the container, which maps to `~/rvt/build` on the host via the volume mount.
+Note: Caddy serves from `/srv/rvt/dist` inside the container, which maps to `~/rvt/build` on the host via the volume mount. The `root` directive must use the **container path**, not the host path — Caddy evaluates it inside the container where the volume is mounted.
 
 ---
 
@@ -148,10 +148,10 @@ No extra `-e` flags needed. Caddy email is read from the existing Caddyfile.
 
 ## 10. Acceptance Criteria
 
-- [ ] `rvt.buildwithdreams.com` resolves and returns HTTP 200 with SPA content
-- [ ] TLS certificate auto-provisioned (Caddy handles this)
-- [ ] SPA routing works — deep links return the app, not 404
-- [ ] All playbooks idempotent — safe to re-run
-- [ ] No manual SSH commands required
-- [ ] Caddy container restarts with new volume mount (playbook 28 update needed first)
+- [x] `rvt.buildwithdreams.com` resolves and returns HTTP 200 with SPA content
+- [x] TLS certificate auto-provisioned (Caddy handles this)
+- [x] SPA routing works — deep links return the app, not 404
+- [x] All playbooks idempotent — safe to re-run
+- [x] No manual SSH commands required
+- [x] Caddy container uses correct volume mount path (playbook 28 + 32 fixes)
 
