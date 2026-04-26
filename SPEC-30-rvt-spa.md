@@ -17,13 +17,14 @@ This is an as-is deployment from the upstream fork. Future development will happ
 ## 2. Architecture
 
 ```
-Internet → Caddy (443) → rvt.buildwithdreams.com → static files on host ~/rvt/dist/
+Internet → Caddy (443) → rvt.buildwithdreams.com → static files on host ~/rvt/build/
 ```
 
-- **Build:** `node:alpine` container runs `npm run build`, output lands in `~/rvt/dist/` on the host
-- **Serve:** Existing Caddy (10.201.0.10) serves `~/rvt/dist/` directly via `file_server` + `try_files {path} /index.html`
+- **Build:** `node:alpine` container runs `npm run build`, output lands in `~/rvt/build/` on the host
+- **Serve:** Existing Caddy (10.201.0.10) serves `~/rvt/build/` directly via `file_server` + `try_files {path} /index.html`
 - **No SPA container needed** — Caddy hosts the static files directly, avoiding a separate container for this
 - **Network:** `net-vrsc-blue` (10.201.0.0/24), Caddy already on `.10`
+- **Note:** Vite is configured with `outDir: 'build'` — this is the project's existing config, not a convention choice
 
 ---
 
@@ -61,7 +62,7 @@ rvt.buildwithdreams.com {
 }
 ```
 
-Caddy container must have `/home/dream-hermes-agent/rvt/dist` bind-mounted or the path must be readable.
+Note: Caddy serves from `/srv/rvt/dist` inside the container, which maps to `~/rvt/build` on the host via the volume mount.
 
 ---
 
@@ -75,18 +76,19 @@ Caddy container must have `/home/dream-hermes-agent/rvt/dist` bind-mounted or th
 
 ### 5.2 `31-spa-rvt-build.yml`
 - Runs `npm run build` inside a `node:alpine` container (bind-mounts rvt dir as `/srv/app`)
-- Build output lands in `~/rvt/dist/` on the host
-- Always runs build (no skip logic — Vite is fast and stale output is hard to detect cleanly)
+- Build output lands in `~/rvt/build/` on the host (Vite's configured outDir)
+- Always runs build (no skip logic — Vite is fast and stale output detection is unreliable)
 - **Requires:** `30-spa-rvt-clone.yml`
 - **Run:** `ansible-playbook -i inventory.ini playbooks/31-spa-rvt-build.yml`
 
 ### 5.3 `32-spa-rvt-caddy-route.yml`
 - Adds `rvt.buildwithdreams.com` route block to the existing Caddyfile at `~/caddy/Caddyfile`
+- Caddy serves from `/srv/rvt/dist` (container path) → `~/rvt/build` (host path) via volume mount
 - Uses `file_server` + `try_files {path} /index.html` for SPA routing (vue-router history mode)
 - Templates the Caddyfile atomically (writes temp file, then moves it)
 - Triggers Caddy reload: `docker exec mains_blue_caddy-caddy-1 caddy reload --config /etc/caddy/Caddyfile`
 - Idempotent: uses `lineinfile` / blockinfile to append route only if not already present
-- **Requires:** `31-spa-rvt-build.yml` (dist must exist)
+- **Requires:** `31-spa-rvt-build.yml` (build/ must exist)
 - **Run:** `ansible-playbook -i inventory.ini playbooks/32-spa-rvt-caddy-route.yml`
 
 ---
@@ -104,7 +106,7 @@ The Caddy container needs to read `~/rvt/dist/`. The existing Caddy deploy (play
 volumes:
   - ./Caddyfile:/etc/caddy/Caddyfile:ro
   - ./data:/data
-  - /home/dream-hermes-agent/rvt/dist:/srv/rvt/dist:ro
+  - /home/dream-hermes-agent/rvt/build:/srv/rvt/dist:ro
 ```
 
 This must be done before playbook 32 can work. See feedback item below.
