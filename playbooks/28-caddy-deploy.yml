@@ -109,6 +109,7 @@
               volumes:
                 - ./Caddyfile:/etc/caddy/Caddyfile:ro
                 - ./data:/data
+                - /home/{{ ansible_user }}/rvt/dist:/srv/rvt/dist:ro
               restart: unless-stopped
               healthcheck:
                 test: ["CMD", "caddy", "health"]

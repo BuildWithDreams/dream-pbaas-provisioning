@@ -1,0 +1,36 @@
+# Playbook: 30-spa-rvt-clone.yml
+# Purpose: Clone BuildWithDreams/rvt to ~/rvt on the target host.
+# Run with: ansible-playbook -i inventory.ini playbooks/30-spa-rvt-clone.yml
+# Idempotent: skips if ~/rvt already exists; does git pull to update.
+---
+- name: Clone RVT repository
+  hosts: production
+  become: false
+  vars:
+    rvt_repo_url: "https://github.com/BuildWithDreams/rvt.git"
+    rvt_path: "/home/{{ ansible_user }}/rvt"
+
+  tasks:
+    - name: Check if rvt directory already exists
+      ansible.builtin.stat:
+        path: "{{ rvt_path }}"
+      register: rvt_dir_stat
+
+    - name: Display clone plan
+      ansible.builtin.debug:
+        msg: >
+          Clone {{ rvt_repo_url }} to {{ rvt_path }}.
+          {{ 'Directory exists — will pull latest.' if rvt_dir_stat.stat.exists else 'Will clone fresh.' }}
+
+    - name: Clone or update repository
+      ansible.builtin.git:
+        repo: "{{ rvt_repo_url }}"
+        dest: "{{ rvt_path }}"
+        clone: "{{ not rvt_dir_stat.stat.exists }}"
+        update: true
+        accept_hostkey: true
+      register: clone_result
+
+    - name: Display clone status
+      ansible.builtin.debug:
+        msg: "{{ 'Cloned fresh repository' if clone_result.changed else 'Repository already up-to-date' }}"
