@@ -40,16 +40,16 @@
       changed_when: true
       failed_when: false
 
-    - name: Verify dist directory was created
+    - name: Verify build directory was created
       ansible.builtin.stat:
-        path: "{{ rvt_path }}/dist"
+        path: "{{ rvt_path }}/build"
       register: dist_stat
 
-    - name: Fail if dist not created
+    - name: Fail if build not created
       ansible.builtin.fail:
-        msg: "Build failed — {{ rvt_path }}/dist was not created. Check build output above."
+        msg: "Build failed — {{ rvt_path }}/build was not created. Check build output above."
       when: not dist_stat.stat.exists
 
     - name: Display build result
       ansible.builtin.debug:
-        msg: "Build complete — dist/ created at {{ rvt_path }}/dist"
+        msg: "Build complete — build/ created at {{ rvt_path }}/build"

@@ -16,9 +16,9 @@
 
   tasks:
     # ── 1. Validate dist/ exists ────────────────────────────────────────────────
-    - name: Verify rvt dist directory exists
+    - name: Verify rvt build directory exists
       ansible.builtin.stat:
-        path: "{{ rvt_path }}/dist"
+        path: "{{ rvt_path }}/build"
       register: dist_stat
       failed_when: not dist_stat.stat.exists
 
@@ -47,14 +47,15 @@
         path: "{{ caddy_path }}/Caddyfile"
         marker: "# {mark} ANSIBLE MANAGED BLOCK — rvt.buildwithdreams.com"
         content: |
-          {{ rvt_domain }} {
-            root * {{ rvt_path }}/dist
-            file_server
-            try_files {path} /index.html
-            log {
-              output file /data/access.log
-            }
-          }
+rvt.buildwithdreams.com {
+  root * /home/dream-hermes-agent/rvt/build
+  file_server
+  try_files {path} /index.html
+  tls hermesreport@verus.trading
+  log {
+    output file /data/access.log
+  }
+}
       register: caddyfile_updated
       when: route_check.stdout == 'absent'
 

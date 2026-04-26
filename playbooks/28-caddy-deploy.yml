@@ -56,8 +56,21 @@
         group: "{{ ansible_user }}"
         mode: '0755'
 
-    # ── 3. Write Caddyfile ──────────────────────────────────────────────────────
-    - name: Write Caddyfile
+    # ── 3. Write Caddyfile (idempotent — preserve existing managed blocks) ─────────
+    - name: Check if Caddyfile already exists
+      ansible.builtin.stat:
+        path: "{{ caddy_path }}/Caddyfile"
+      register: caddyfile_exists_stat
+
+    - name: Read existing Caddyfile if present
+      ansible.builtin.shell:
+        cmd: "cat {{ caddy_path }}/Caddyfile"
+      register: existing_caddyfile
+      failed_when: false
+      changed_when: false
+      when: caddyfile_exists_stat.stat.exists
+
+    - name: Write Caddyfile base template
       ansible.builtin.copy:
         content: |
           {
@@ -79,11 +92,48 @@
               output file /data/access.log
             }
           }
-        dest: "{{ caddy_path }}/Caddyfile"
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0644'
+
+      dest: "{{ caddy_path }}/Caddyfile"
+      owner: "{{ ansible_user }}"
+      group: "{{ ansible_user }}"
+      mode: '0644'
+      when: not caddyfile_exists_stat.stat.exists
       register: caddyfile_written
+
+    - name: Append existing managed blocks to base Caddyfile
+      ansible.builtin.shell:
+        cmd: |
+          BASE=$(mktemp)
+          cat > "$BASE" << 'BASEFILE'
+          {
+            email {{ caddy_letsencrypt_email }}
+          }
+
+          rpc.vrsc.{{ caddy_domain }} {
+            reverse_proxy {{ rpc_upstream }}
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+
+          qrcodes.{{ caddy_domain }} {
+            reverse_proxy {{ qr_upstream }}
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+          BASEFILE
+          # Append any existing ANSIBLE MANAGED BLOCKs
+          if grep -q 'ANSIBLE MANAGED BLOCK' {{ caddy_path }}/Caddyfile; then
+            # Extract existing managed blocks (lines between BEGIN and END markers)
+            awk '/# BEGIN ANSIBLE MANAGED BLOCK/,/# END ANSIBLE MANAGED BLOCK/' {{ caddy_path }}/Caddyfile >> "$BASE"
+          fi
+          mv "$BASE" {{ caddy_path }}/Caddyfile
+      when: caddyfile_exists_stat.stat.exists
+      changed_when: true
+      register: caddyfile_updated
 
     - name: Display Caddyfile status
       ansible.builtin.debug:
@@ -107,9 +157,10 @@
                 pbaas_network:
                   ipv4_address: {{ caddy_bind_ip }}
               volumes:
-                - ./Caddyfile:/etc/caddy/Caddyfile:ro
-                - ./data:/data
-                - /home/{{ ansible_user }}/rvt/dist:/srv/rvt/dist:ro
+                - /home/{{ ansible_user }}/caddy:/config/caddy:ro
+                - /home/{{ ansible_user }}/caddy/data:/data
+                - /home/{{ ansible_user }}/rvt/build:/srv/rvt/dist:ro
+              command: caddy run --config /config/caddy/Caddyfile --adapter caddyfile
               restart: unless-stopped
               healthcheck:
                 test: ["CMD", "caddy", "health"]
