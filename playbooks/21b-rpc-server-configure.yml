@@ -13,11 +13,11 @@
     rpc_server_path: "/home/{{ ansible_user }}/rust_verusd_rpc_server"
     conf_toml: "{{ rpc_server_path }}/Conf.toml"
     docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
-    vrsctest_conf: "{{ docker_verusd_path }}/vrsctest/data_dir/VRSCTEST.conf"
+    vrsctest_conf: "{{ docker_verusd_path }}/vrsctest/data_dir/vrsctest.conf"
     rpc_bind_ip: "10.200.0.12"
     rpc_bind_port: "37486"
     vrsctest_daemon_ip: "10.200.0.11"
-    vrsctest_rpc_port: "27486"
+    vrsctest_rpc_port: "18843"
 
   tasks:
     # ── 1. Verify repo was cloned ─────────────────────────────────────────────
