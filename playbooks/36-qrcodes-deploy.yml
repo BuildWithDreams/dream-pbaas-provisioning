@@ -48,8 +48,6 @@
               image: {{ image_name }}:{{ image_tag }}
               container_name: {{ container_name }}
               hostname: vrsctest-qr-creator
-              ports:
-                - "127.0.0.1:3000:3000"
               networks:
                 pbaas_network:
                   ipv4_address: {{ qr_bind_ip }}
@@ -111,7 +109,7 @@
             image     → {{ image_name }}:{{ image_tag }}
             network   → {{ docker_network }}
             IP        → {{ qr_bind_ip }}
-            port      → localhost:3000 (no external port — internal only)
+            port      → internal only (no host port — Caddy reaches via Docker network)
             URL       → http://{{ qr_bind_ip }}:{{ qr_bind_port }}
 
           Verify:
