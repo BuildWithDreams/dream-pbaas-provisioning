@@ -24,14 +24,16 @@
           {{ 'Directory exists — will pull latest.' if qr_dir_stat.stat.exists else 'Will clone fresh.' }}
 
     - name: Clone or update repository
-      ansible.builtin.git:
-        repo: "{{ qr_repo_url }}"
-        dest: "{{ qr_path }}"
-        clone: "{{ not qr_dir_stat.stat.exists }}"
-        update: true
-        accept_hostkey: true
-        depth: 1
+      ansible.builtin.shell:
+        cmd: |
+          if [ -d "{{ qr_path }}/.git" ]; then
+            echo "exists"
+          else
+            git clone --depth=1 {{ qr_repo_url }} "{{ qr_path }}"
+            echo "cloned"
+          fi
       register: clone_result
+      changed_when: clone_result.stdout == "cloned"
 
     - name: Display clone status
       ansible.builtin.debug:
