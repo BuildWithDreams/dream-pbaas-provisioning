@@ -1,0 +1,64 @@
+# Playbook: 15b-sync-status-vrsctest.yml
+# Purpose: Check sync status for VRSCTEST testnet chain on BWD.
+# Queries getinfo from the container and reports local block height,
+# network tip, sync gap, peer count, and TLS status.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbooks/15b-sync-status-vrsctest.yml
+
+---
+- name: Check VRSCTEST testnet sync status
+  hosts: production
+  gather_facts: false
+  vars:
+    ansible_user: dream-hermes-agent
+
+  tasks:
+    - name: Query VRSCTEST getinfo
+      ansible.builtin.shell:
+        cmd: docker exec dev200-vrsctest-1 verus -chain=VRSCTEST getinfo 2>&1
+      register: vrsctest_info
+      changed_when: false
+      failed_when: false
+
+    - name: Parse VRSCTEST fields
+      ansible.builtin.set_fact:
+        vrsctest_blocks: "{{ (vrsctest_info.stdout | from_json).blocks if (vrsctest_info.stdout is search('blocks')) else 0 }}"
+        vrsctest_longest: "{{ (vrsctest_info.stdout | from_json).longestchain if (vrsctest_info.stdout is search('longestchain')) else 0 }}"
+        vrsctest_tlptime: "{{ (vrsctest_info.stdout | from_json).tiptime if (vrsctest_info.stdout is search('tiptime')) else 0 }}"
+        vrsctest_peers: "{{ (vrsctest_info.stdout | from_json).connections if (vrsctest_info.stdout is search('connections')) else 0 }}"
+        vrsctest_tls: "{{ (vrsctest_info.stdout | from_json).tls_established if (vrsctest_info.stdout is search('tls_established')) else 0 }}"
+        vrsctest_name: "{{ (vrsctest_info.stdout | from_json).name if (vrsctest_info.stdout is search('\"name\"')) else 'VRSCTEST' }}"
+      when: vrsctest_info.stdout is search('"blocks"')
+
+    - name: Calculate sync gap
+      ansible.builtin.set_fact:
+        vrsctest_gap: "{{ (vrsctest_longest | int) - (vrsctest_blocks | int) }}"
+      when: vrsctest_blocks | int > 0
+
+    - name: Format timestamp
+      ansible.builtin.set_fact:
+        vrsctest_tip_str: "{{ '%Y-%m-%d %H:%M:%S' | strftime(vrsctest_tlptime | int) if vrsctest_tlptime | int > 0 else 'N/A' }}"
+      when: vrsctest_tlptime is defined
+
+    - name: Display sync status report
+      ansible.builtin.debug:
+        msg: |
+          {% if vrsctest_blocks | int > 0 %}
+          ╔═══════════════════════════════════════════════════════════╗
+          ║         VRSCTEST Testnet Sync Status — BWD                  ║
+          ╠══════════════╦═══════════════╦══════════╦═══════════════════╣
+          ║ Chain        ║ Local / Tip   ║ Gap      ║ Peers / TLS       ║
+          ╠══════════════╬═══════════════╬══════════╬═══════════════════╣
+          ║ VRSCTEST     ║ {{ '%07d' % (vrsctest_blocks | int) }} / {{ '%07d' % (vrsctest_longest | int) }} ║ {{ '%+7d' | format(vrsctest_gap | int) }} ║ {{ '%3d' % (vrsctest_peers | int) }} / {{ vrsctest_tls | int }}         ║
+          ╚══════════════╩═══════════════╩══════════╩═══════════════════╝
+          Tip timestamp: {{ vrsctest_tip_str }}
+          {% else %}
+          VRSCTEST is offline or still starting.
+          Last output: {{ vrsctest_info.stderr | default(vrsctest_info.stdout) }}
+          {% endif %}
+
+    - name: Show raw error if VRSCTEST is down
+      ansible.builtin.debug:
+        msg: "VRSCTEST error: {{ vrsctest_info.stderr | default(vrsctest_info.stdout) }}"
+      when: vrsctest_blocks | int == 0

@@ -1,0 +1,134 @@
+# Playbook: 07b-setup-vrsctest.yml
+# Purpose: Set up VRSCTEST testnet environment — copy env.sample, set bootstrap flag, fix IPs
+# Run with: ansible-playbook -i inventory.ini playbooks/07b-setup-vrsctest.yml
+#
+# Bootstrap logic (robust — two conditions required to disable bootstrap):
+#   1. data_dir/chainstate AND data_dir/blocks exist
+#   2. data_dir/VRSCTEST/debug.log ends with "Shutdown: done" (clean prior shutdown)
+# If both true  → VERUSD_BOOTSTRAP_FLAG= (empty — safe to sync from peers)
+# If either false → VERUSD_BOOTSTRAP_FLAG=-bootstrap (ensure clean state)
+
+---
+- name: Set up VRSCTEST testnet
+  hosts: production
+  become: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    vrsctest_path: "/home/{{ ansible_user }}/docker-verusd/vrsctest"
+    data_dir: "{{ vrsctest_path }}/data_dir"
+
+  tasks:
+    # 1. Copy env.sample to .env
+    - name: Copy env.sample to .env
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ vrsctest_path }}/env.sample"
+        dest: "{{ vrsctest_path }}/.env"
+        mode: '0644'
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+      register: env_copy
+
+    # 2. Look up the actual subnet for net-vrsctest (shell needed for pipe)
+    - name: Get net-vrsctest subnet
+      ansible.builtin.shell:
+        cmd: "docker network inspect net-vrsctest | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d[0]['IPAM']['Config'][0]['Subnet'])\""
+      register: vrsctest_subnet_output
+      changed_when: false
+      failed_when: false
+
+    - name: Derive verusd IP from subnet
+      ansible.builtin.set_fact:
+        vrsctest_ip: "{{ vrsctest_subnet_output.stdout | regex_replace('(\\d+\\.\\d+\\.\\d+\\.)\\d+/\\d+', '\\g<1>11') }}"
+      when: vrsctest_subnet_output.stdout is defined and vrsctest_subnet_output.stdout | length > 0
+
+    - name: Fail if net-vrsctest network not found
+      ansible.builtin.fail:
+        msg: "Network 'net-vrsctest' not found. Run 03-docker-networks.yml first."
+      when: vrsctest_subnet_output.stdout is not defined or vrsctest_subnet_output.stdout | length == 0
+
+    - name: Update VERUSD_IPV4 in .env
+      ansible.builtin.lineinfile:
+        path: "{{ vrsctest_path }}/.env"
+        regexp: '^VERUSD_IPV4='
+        line: "VERUSD_IPV4={{ vrsctest_ip }}"
+      register: ip_updated
+
+    - name: Display IP correction
+      ansible.builtin.debug:
+        msg: "Fixed VERUSD_IPV4: now {{ vrsctest_ip }} ({{ vrsctest_subnet_output.stdout }})"
+
+    - name: Display env copy result
+      ansible.builtin.debug:
+        msg: "env.sample copied to {{ vrsctest_path }}/.env"
+
+    # 3. Check data dirs exist (condition 1 of 2 for disabling bootstrap)
+    - name: Check for chainstate directory
+      ansible.builtin.stat:
+        path: "{{ data_dir }}/chainstate"
+      register: chainstate_dir
+
+    - name: Check for blocks directory
+      ansible.builtin.stat:
+        path: "{{ data_dir }}/blocks"
+      register: blocks_dir
+
+    # 4. Check debug.log for clean shutdown (condition 2 of 2 — daemon is offline here, use log)
+    - name: Check debug.log for clean shutdown
+      ansible.builtin.shell:
+        cmd: "tail -1 /root/.komodo/VRSCTEST/debug.log 2>/dev/null || echo '{{ '{{' }}NO_LOG{{ '}}' }}"
+      register: debug_log_tail
+      changed_when: false
+      failed_when: false
+
+    - name: Detect clean shutdown
+      ansible.builtin.set_fact:
+        clean_shutdown: "{{ debug_log_tail.stdout | trim | regex_search('Shutdown: done') != '' }}"
+
+    - name: Display bootstrap pre-check
+      ansible.builtin.debug:
+        msg: |
+          chainstate exists: {{ chainstate_dir.stat.exists }}
+          blocks exists: {{ blocks_dir.stat.exists }}
+          debug.log tail: "{{ debug_log_tail.stdout | trim }}"
+          clean shutdown: {{ clean_shutdown }}
+
+    # 5. Determine bootstrap flag — both conditions must be true to disable bootstrap
+    - name: Determine if bootstrap needed
+      ansible.builtin.set_fact:
+        is_first_run: "{{ not (chainstate_dir.stat.exists and blocks_dir.stat.exists and clean_shutdown | bool) }}"
+
+    - name: Set bootstrap flag
+      ansible.builtin.set_fact:
+        new_bootstrap_flag: "{{ '-bootstrap' if is_first_run | bool else '' }}"
+
+    - name: Display bootstrap decision
+      ansible.builtin.debug:
+        msg: |
+          is_first_run: {{ is_first_run }}
+          BOOTSTRAP_FLAG set to '{{ new_bootstrap_flag }}'
+          Reason: {{ 'bootstrap required — data dirs missing or unclean prior shutdown' if is_first_run else 'safe to sync from peers — clean shutdown confirmed' }}
+
+    # 6. Update BOOTSTRAP_FLAG in .env
+    - name: Update BOOTSTRAP_FLAG in .env
+      ansible.builtin.lineinfile:
+        path: "{{ vrsctest_path }}/.env"
+        regexp: '^VERUSD_BOOTSTRAP_FLAG='
+        line: "VERUSD_BOOTSTRAP_FLAG={{ new_bootstrap_flag }}"
+        state: present
+      register: bootstrap_updated
+
+    - name: Display updated .env
+      ansible.builtin.debug:
+        msg: "BOOTSTRAP_FLAG set to '{{ new_bootstrap_flag }}' in {{ vrsctest_path }}/.env"
+
+    # 7. Display final .env contents
+    - name: Read .env
+      ansible.builtin.shell:
+        cmd: "cat {{ vrsctest_path }}/.env"
+      changed_when: false
+      register: final_env
+
+    - name: Display final .env contents
+      ansible.builtin.debug:
+        msg: ".env setup complete:\n{{ final_env.stdout }}"
