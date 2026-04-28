@@ -1,7 +1,7 @@
 # SPEC: VRSCTEST Testnet Node Provisioning
 
 ## Status
-Draft — pending questions in §6
+**Ready for implementation.** All open questions resolved (see §6).
 
 ## Overview
 
@@ -18,43 +18,41 @@ Provision a Verus **testnet** node (`VRSCTEST`) on the BWD server, mirroring the
 | Docker network name | `net-vrsctest` |
 | verusd IP | `10.200.0.11` |
 
-> **Conventions (from memory):** VRSC=201, VARRR=202, vDEX=203, CHIPS=204 → VRSCTEST=200 (user-specified).
-
 **Playbook: `03-docker-networks.yml`** (augmented)
-- Add a `net-vrsctest` entry to `verus_networks` in `group_vars/production.yml`
-- Or better: add to the source `env.sample` in `docker-verusd/infrastructure/` and regenerate via `02-generate-env-files.yml`
-- The network create step in `03-docker-networks.yml` is already a loop — no new playbook needed
+- Add `net-vrsctest` entry to `verus_networks` in `group_vars/production.yml`
+- Or better: add to source `env.sample` in `docker-verusd/infrastructure/` and regenerate via `02-generate-env-files.yml`
+- The network create loop already handles it — no new playbook needed
 
 ---
 
 ## 2. docker-verusd Files (vrsctest/ dir)
 
-> ⚠️ The existing `vrsctest/` dir in `docker-verusd` has stale content that must be corrected before provisioning.
+> ✅ docker-verusd `feature/vrsctest` branch has been updated. All changes are committed and pushed.
 
-### `vrsctest/docker-compose.yml` — issues to fix
+### `vrsctest/docker-compose.yml`
 
-| Field | Existing (wrong) | Correct |
-|---|---|---|
-| `image` | `verustrading/verusd:0.1` | `buildwithdreams/verusd:<tag>` |
-| `command` | `verusd -chain=vrsctest -testnet …` | `verusd -chain=VRSCTEST ${VERUSD_BOOTSTRAP_FLAG}` |
-| `volumes` | `./data_dir:/root/.komodo/vrsctest` | `./data_dir:/root/.komodo/VRSCTEST` |
-| `network` | `dev16` | `pbaas_network` (matches mainnet) |
+| Field | Value |
+|---|---|
+| `image` | `buildwithdreams/verusd:${VERUSD_IMAGE_TAG}` |
+| `command` | `verusd -chain=VRSCTEST ${VERUSD_BOOTSTRAP_FLAG}` |
+| `volumes` | `./data_dir:/root/.komodo/VRSCTEST` |
+| `network` | `pbaas_network` (external: `net-vrsctest`) |
+| `ports` | `127.0.0.1:${LOCAL_RPC_PORT}:${VERUSD_RPC_PORT}` |
 
-### `vrsctest/env.sample` — issues to fix
+### `vrsctest/env.sample`
 
-| Field | Existing (wrong) | Correct |
-|---|---|---|
-| `DOCKER_NETWORK_SUBNET` | `10.199.0.0/24` | `10.200.0.0/24` |
-| `BRIDGE_CUSTOM_NAME` | `SP1019901` | `SP1020001` |
-| `DOCKER_NETWORK_NAME` | `dev199` | `net-vrsctest` |
-| `VERUSD_IPV4` | `10.199.0.11` | `10.200.0.11` |
-| `VERUSD_HOSTNAME` | `verusd_vrsctest` | `verusd_vrsctest` (ok) |
+| Field | Value |
+|---|---|
+| `COMPOSE_PROJECT_NAME` | `dev200` |
+| `DOCKER_NETWORK_SUBNET` | `10.200.0.0/24` |
+| `BRIDGE_CUSTOM_NAME` | `SP1020001` |
+| `DOCKER_NETWORK_NAME` | `net-vrsctest` |
+| `VERUSD_IPV4` | `10.200.0.11` |
+| `VERUSD_IMAGE_TAG` | `1.2.16` (pinned) |
 
-> The command in compose should be `verusd -chain=VRSCTEST` — Verus uses `-chain=VRSCTEST` to select the testnet chain; `-testnet` is a separate legacy flag that should not be combined with `-chain=` for a named testnet.
+### `vrsctest/data_dir/`
 
-### `vrsctest/data_dir/VRSC.conf` (on host)
-
-No separate config file is created by the compose — verusd reads from the data dir. A `sample.conf` exists; it appears to be a PBaaS chain config (not a plain VRSCTEST config). Confirm whether a basic `VRSC.conf` with `rpcuser`, `rpcpassword`, `server=1`, `txindex=1` is sufficient or if the existing PBaaS fields are needed.
+Empty. No `sample.conf` or `VRSC.conf` committed — verusd generates `VRSCTEST.conf` on first start.
 
 ---
 
@@ -100,13 +98,15 @@ Mirrors `08-start-vrsc.yml` with these substitutions:
 | `compose_path` | `mainnet` | `vrsctest` |
 | `service_name` | `vrsc` | `vrsctest` |
 | `container_check_pattern` | `(-vrsc-1\|mains_blue-vrsc-1\|pbaas_mainnets-vrsc-1)` | `vrsctest` |
+| **image tag** | Fetch from GitHub releases | Read `VERUSD_IMAGE_TAG` from `.env` (pinned: `1.2.16`) |
+
+> Unlike mainnet, VRSCTEST does not fetch the latest release tag — it uses the pinned value from `env.sample`.
 
 **Steps:**
-1. Fetch latest Verus release → resolve image tag
-2. Read `.env` → extract `DOCKER_NETWORK_NAME`
-3. Verify `net-vrsctest` Docker network exists (fail if not)
-4. `source .env && docker compose pull && docker compose up -d`
-5. Run `check-vrsc-container.sh` (or a renamed variant) to verify container health
+1. Read `.env` → extract `DOCKER_NETWORK_NAME` and `VERUSD_IMAGE_TAG`
+2. Verify `net-vrsctest` Docker network exists (fail if not)
+3. `source .env && docker compose pull && docker compose up -d`
+4. Run container check script to verify health
 
 ---
 
@@ -145,19 +145,11 @@ Mirrors `10-shutdown-vrsc.yml`:
 
 ---
 
-## 6. Outstanding Questions
+## 6. Resolved Decisions
 
-### Q1: compose-project-name collision
-VRSC mainnet uses `COMPOSE_PROJECT_NAME=mains_blue`. VRSCTEST compose has `COMPOSE_PROJECT_NAME=dev199`. What should the compose project name for VRSCTEST be? Options:
-- `mains_blue` (same project, different network — likely breaks existing naming)
-- `testnet` / `vrsctest`
-- `dev200`
-
-### Q2: docker-verusd repo changes
-The `vrsctest/` dir in `docker-verusd` needs the fixes listed in §2. Who applies these before running the playbooks, or should the playbooks fix them idempotently?
-
-### Q3: Verus image tag
-Should VRSCTEST pin to the same tagged version as production (`buildwithdreams/verusd:1.2.16`), or always use `latest`? VRSC mainnet resolves the tag dynamically from GitHub releases.
-
-### Q4: PBaaS fields in VRSC.conf
-The existing `data_dir/sample.conf` has PBaaS-specific fields (`launchsystemid`, `parentid`, `ac_algo`, etc.). Is a plain VRSCTEST testnet config needed, or is the sample sufficient as-is?
+| Q | Decision |
+|---|---|
+| compose-project-name | `dev200` |
+| docker-verusd repo | Fixed on `feature/vrsctest` branch — committed and pushed |
+| Image tag | Pinned to `1.2.16` via `VERUSD_IMAGE_TAG` env var |
+| VRSC.conf | No pre-generated config — verusd generates `VRSCTEST.conf` on first start |
