@@ -1,0 +1,95 @@
+# Playbook: 38-qrcodes-caddy-route.yml
+# Purpose: Add qrcodes.vrsctest.buildwithdreams.com route to the existing Caddyfile
+#          and reload Caddy. Proxies to 10.200.0.13:3000 inside net-vrsctest.
+# Run with: ansible-playbook -i inventory.ini playbooks/38-qrcodes-caddy-route.yml
+# Requires: 36-qrcodes-deploy.yml (container running); 37-qrcodes-caddy-network.yml
+# Idempotent: safe to re-run — route block present on subsequent runs.
+---
+- name: Add qrcodes.vrsctest Caddy route
+  hosts: production
+  become: false
+  vars:
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    qr_bind_ip: "10.200.0.13"
+    qr_port: "3000"
+    qr_domain: "qrcodes.vrsctest.buildwithdreams.com"
+
+  tasks:
+    # ── 1. Validate Caddyfile exists ────────────────────────────────────────────
+    - name: Verify Caddyfile exists
+      ansible.builtin.stat:
+        path: "{{ caddy_path }}/Caddyfile"
+      register: caddyfile_stat
+      failed_when: not caddyfile_stat.stat.exists
+
+    # ── 2. Check if route already exists ───────────────────────────────────────
+    - name: Check if qrcodes.vrsctest route already in Caddyfile
+      ansible.builtin.shell:
+        cmd: "grep -q 'qrcodes.vrsctest.buildwithdreams.com' {{ caddy_path }}/Caddyfile && echo 'present' || echo 'absent'"
+      register: route_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display route status
+      ansible.builtin.debug:
+        msg: "qrcodes.vrsctest route in Caddyfile: {{ route_check.stdout }}"
+
+    # ── 3. Append route block if not present ────────────────────────────────────
+    - name: Append qrcodes.vrsctest route to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK — qrcodes.vrsctest.buildwithdreams.com"
+        content: |
+          qrcodes.vrsctest.buildwithdreams.com {
+            reverse_proxy {{ qr_bind_ip }}:{{ qr_port }}
+            tls hermesreport@verus.trading
+            log {
+              output file /data/access.log
+            }
+          }
+      register: caddyfile_updated
+      when: route_check.stdout == 'absent'
+
+    - name: Display Caddyfile update result
+      ansible.builtin.debug:
+        msg: "Caddyfile updated — qrcodes.vrsctest route block {{ 'added' if caddyfile_updated.changed else 'already present' }}"
+      when: route_check.stdout == 'absent'
+
+    # ── 4. Verify Caddyfile is valid before reload ─────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      failed_when: false
+      changed_when: false
+
+    - name: Abort if Caddyfile invalid
+      ansible.builtin.fail:
+        msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
+      when: caddy_validate.rc != 0
+
+    # ── 5. Reload Caddy ─────────────────────────────────────────────────────────
+    - name: Reload Caddy to apply new route
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      failed_when: false
+      changed_when: true
+
+    - name: Display reload result
+      ansible.builtin.debug:
+        msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
+
+    # ── 6. Summary ──────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          QRcode creator (VRSCTEST) Caddy route added:
+            URL      → https://{{ qr_domain }}
+            Upstream → {{ qr_bind_ip }}:{{ qr_port }}
+            TLS      → hermesreport@verus.trading (manual)
+            Route    → reverse_proxy (no path rewrite)
+
+          Verify:
+            curl -I https://{{ qr_domain }}

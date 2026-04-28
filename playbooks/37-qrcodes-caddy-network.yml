@@ -1,0 +1,81 @@
+# Playbook: 37-qrcodes-caddy-network.yml
+# Purpose: Connect the existing Caddy container to net-vrsctest so it can proxy
+#          qrcodes.vrsctest.buildwithdreams.com from inside that network.
+#          Caddy is already on net-vrsc-blue (10.201.0.10). After this playbook
+#          it will be on both networks simultaneously.
+# Run with: ansible-playbook -i inventory.ini playbooks/37-qrcodes-caddy-network.yml
+# Requires: Caddy container running (28-caddy-deploy.yml complete)
+# Idempotent: safe to re-run — skips if already connected.
+---
+- name: Connect Caddy to net-vrsctest
+  hosts: production
+  become: false
+  vars:
+    caddy_container: "mains_blue_caddy-caddy-1"
+    docker_network: "net-vrsctest"
+
+  tasks:
+    # ── 1. Verify Caddy is running ────────────────────────────────────────────────
+    - name: Verify Caddy container is running
+      ansible.builtin.shell:
+        cmd: "docker ps --filter 'name={{ caddy_container }}' --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null"
+      register: caddy_running
+      changed_when: false
+      failed_when: caddy_running.stdout != caddy_container
+
+    # ── 2. Check if already connected ─────────────────────────────────────────────
+    - name: Check if already connected to net-vrsctest
+      ansible.builtin.shell:
+        cmd: >
+          docker network inspect net-vrsctest --format '{{ '{{' }}range .Containers{{ '}}' }}{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}end{{ '}}' }}'
+          | grep -w '{{ caddy_container }}'
+          && echo 'connected'
+          || echo 'not_connected'
+      register: net_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display current state
+      ansible.builtin.debug:
+        msg: "Caddy {{ 'already on net-vrsctest' if net_check.stdout == 'connected' else 'will be connected to net-vrsctest' }}"
+
+    # ── 3. Connect to net-vrsctest ───────────────────────────────────────────────
+    - name: Connect Caddy to net-vrsctest
+      ansible.builtin.shell:
+        cmd: "docker network connect net-vrsctest {{ caddy_container }}"
+      register: connect_result
+      changed_when: true
+      when: net_check.stdout != 'connected'
+
+    - name: Display connect result
+      ansible.builtin.debug:
+        msg: "Caddy connected to net-vrsctest: {{ connect_result.stdout if connect_result.stdout else 'connected' }}"
+      when: net_check.stdout != 'connected'
+
+    # ── 4. Verify connection ──────────────────────────────────────────────────────
+    - name: Verify Caddy is now on net-vrsctest
+      ansible.builtin.shell:
+        cmd: >
+          docker network inspect net-vrsctest --format '{{ '{{' }}range .Containers{{ '}}' }}{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}end{{ '}}' }}'
+          | grep -w '{{ caddy_container }}'
+          && echo 'verified'
+          || echo 'failed'
+      register: verify_check
+      changed_when: false
+      failed_when: verify_check.stdout != 'verified'
+
+    # ── 5. Summary ───────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          Caddy is now multi-homed:
+            container  → {{ caddy_container }}
+            networks   → net-vrsc-blue (10.201.0.10), net-vrsctest
+            IP on vrsc-blue  → 10.201.0.10 (existing)
+            IP on vrsctest  → automatic (Docker-assigned)
+
+          This allows Caddy to proxy:
+            qrcodes.vrsctest.buildwithdreams.com → 10.200.0.13:3000 (vrsctest network)
+
+          Verify:
+            ssh <host> "docker network inspect net-vrsctest | grep -A5 '{{ caddy_container }}'"
