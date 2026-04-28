@@ -9,7 +9,7 @@
   hosts: production
   become: false
   vars:
-    rpc_port: "37486"
+    rpc_port: "47486"
     rpc_url: "http://localhost:{{ rpc_port }}/api/getinfo"
 
   tasks:

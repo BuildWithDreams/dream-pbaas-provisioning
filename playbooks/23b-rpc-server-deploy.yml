@@ -19,7 +19,7 @@
     docker_network: "net-vrsctest"
     rpc_bind_ip: "10.200.0.12"
     rpc_bind_port: "37486"
-    host_rpc_port: "37486"
+    host_rpc_port: "47486"
 
   tasks:
     # ── 1. Verify image exists ────────────────────────────────────────────────
