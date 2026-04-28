@@ -30,6 +30,7 @@
         clone: "{{ not qr_dir_stat.stat.exists }}"
         update: true
         accept_hostkey: true
+        depth: 1
       register: clone_result
 
     - name: Display clone status
