@@ -1,7 +1,9 @@
 # Playbook: 34-qrcodes-clone.yml
-# Purpose: Clone verus-identity-update-qr-creator-main to ~/qrcodes on target host.
+# Purpose: Ensure verus-identity-update-qr-creator-main is present on target host.
+#          Priority: (1) use existing verus-identity-qr-creator clone if present,
+#                    (2) fall back to git clone --depth=1 from GitHub.
 # Run with: ansible-playbook -i inventory.ini playbooks/34-qrcodes-clone.yml
-# Idempotent: skips if ~/qrcodes already exists; does git pull to update.
+# Idempotent: safe to re-run — skips if target already exists.
 ---
 - name: Clone QRcodes repository
   hosts: production
@@ -10,31 +12,68 @@
     qr_repo_url: "https://github.com/VerusCoin/verus-identity-update-qr-creator-main.git"
     qr_repo_dest: "verus-identity-update-qr-creator-main"
     qr_path: "/home/{{ ansible_user }}/{{ qr_repo_dest }}"
+    qr_path_fallback: "/home/{{ ansible_user }}/verus-identity-qr-creator"
 
   tasks:
-    - name: Check if qrcodes directory already exists
+    # ── 1. Check if target already exists ─────────────────────────────────────────
+    - name: Check if target directory already exists
       ansible.builtin.stat:
         path: "{{ qr_path }}"
       register: qr_dir_stat
 
+    # ── 2. Check for existing fallback clone ──────────────────────────────────────
+    - name: Check for existing verus-identity-qr-creator (BuildWithDreams fork)
+      ansible.builtin.stat:
+        path: "{{ qr_path_fallback }}"
+      register: fallback_dir_stat
+
     - name: Display clone plan
       ansible.builtin.debug:
-        msg: >
-          Clone {{ qr_repo_url }} to {{ qr_path }}.
-          {{ 'Directory exists — will pull latest.' if qr_dir_stat.stat.exists else 'Will clone fresh.' }}
+        msg: |
+          Target: {{ qr_path }}
+          {{ 'Already present — nothing to do.' if qr_dir_stat.stat.exists else (
+              'Fallback clone found at ' + qr_path_fallback + ' — will copy to target.'
+            ) if fallback_dir_stat.stat.exists else
+            ('Will git clone from ' + qr_repo_url) }}
 
-    - name: Clone or update repository
+    # ── 3a. Skip if target already exists ────────────────────────────────────────
+    - name: Report target already present
+      ansible.builtin.set_fact:
+        clone_action: "skip"
+      when: qr_dir_stat.stat.exists
+
+    # ── 3b. Copy from existing fallback clone ────────────────────────────────────
+    - name: Copy existing clone to target path
       ansible.builtin.shell:
-        cmd: |
-          if [ -d "{{ qr_path }}/.git" ]; then
-            echo "exists"
-          else
-            git clone --depth=1 {{ qr_repo_url }} "{{ qr_path }}"
-            echo "cloned"
-          fi
-      register: clone_result
-      changed_when: clone_result.stdout == "cloned"
+        cmd: "cp -a {{ qr_path_fallback }} {{ qr_path }}"
+      register: copy_result
+      changed_when: true
+      when: not qr_dir_stat.stat.exists and fallback_dir_stat.stat.exists
 
-    - name: Display clone status
+    - name: Report copy result
+      ansible.builtin.set_fact:
+        clone_action: "copied"
+      when: not qr_dir_stat.stat.exists and fallback_dir_stat.stat.exists
+
+    # ── 3c. Git clone as last resort ─────────────────────────────────────────────
+    - name: Clone repository from GitHub
+      ansible.builtin.shell:
+        cmd: "git clone --depth=1 {{ qr_repo_url }} {{ qr_path }} 2>&1"
+      register: clone_result
+      changed_when: true
+      when: not qr_dir_stat.stat.exists and not fallback_dir_stat.stat.exists
+
+    - name: Report clone result
+      ansible.builtin.set_fact:
+        clone_action: "cloned"
+      when: not qr_dir_stat.stat.exists and not fallback_dir_stat.stat.exists
+
+    # ── 4. Summary ───────────────────────────────────────────────────────────────
+    - name: Display final status
       ansible.builtin.debug:
-        msg: "{{ 'Cloned fresh repository' if clone_result.changed else 'Repository already up-to-date' }}"
+        msg: |
+          QRcode repo ready at {{ qr_path }}
+          Action: {{ clone_action }}
+          {{ 'Copied from existing BuildWithDreams fork — same source, faster.' if clone_action == 'copied' else '' }}
+          {{ 'Cloned fresh from GitHub.' if clone_action == 'cloned' else '' }}
+          {{ 'Already present — skipped.' if clone_action == 'skip' else '' }}
