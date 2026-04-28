@@ -1,0 +1,79 @@
+# Playbook: 08b-start-vrsctest.yml
+# Purpose: Start VRSCTEST testnet container via docker-compose
+# Run with: ansible-playbook -i inventory.ini playbooks/08b-start-vrsctest.yml
+
+---
+- name: Start VRSCTEST testnet
+  hosts: production
+  become: true
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    vrsctest_path: "/home/{{ ansible_user }}/docker-verusd/vrsctest"
+    image_name: "buildwithdreams/verusd"
+
+  tasks:
+    # 1. Read .env for network name and image tag
+    - name: Read .env
+      ansible.builtin.command:
+        cmd: "cat {{ vrsctest_path }}/.env"
+      register: vrsctest_env
+      changed_when: false
+
+    - name: Set Docker network name fact
+      ansible.builtin.set_fact:
+        docker_network_name: "{{ vrsctest_env.stdout | regex_search('DOCKER_NETWORK_NAME=(\\S+)', '\\1') | first }}"
+        verus_image_tag: "{{ vrsctest_env.stdout | regex_search('VERUSD_IMAGE_TAG=(\\S+)', '\\1') | first }}"
+
+    - name: Display resolved settings
+      ansible.builtin.debug:
+        msg: |
+          Network: {{ docker_network_name }}
+          Image: {{ image_name }}:{{ verus_image_tag }}
+
+    # 2. Verify Docker network exists
+    - name: Check if Docker network exists
+      ansible.builtin.command:
+        cmd: "docker network inspect {{ docker_network_name }}"
+      register: network_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if network not found
+      ansible.builtin.fail:
+        msg: "Network '{{ docker_network_name }}' not found. Run 03-docker-networks.yml first."
+      when: network_check.rc != 0
+
+    - name: Display network info
+      ansible.builtin.debug:
+        msg: "Network '{{ docker_network_name }}' exists — proceeding"
+      when: network_check.rc == 0
+
+    # 3. Build compose command with env vars
+    - name: Load env vars and start container
+      ansible.builtin.shell:
+        cmd: |
+          set -a
+          source "{{ vrsctest_path }}/.env"
+          set +a
+          cd "{{ vrsctest_path }}"
+          IMAGE="{{ image_name }}:{{ verus_image_tag }}" docker compose pull
+          IMAGE="{{ image_name }}:{{ verus_image_tag }}" docker compose up -d
+      register: compose_up
+      changed_when: true
+
+    - name: Display compose output
+      ansible.builtin.debug:
+        msg: "{{ compose_up.stdout_lines }}"
+
+    # 4. Verify container is running
+    - name: Check container status and logs
+      ansible.builtin.script:
+        cmd: scripts/check-vrsctest-container.sh
+      register: container_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "{{ container_check.stdout }}"
+      when: container_check.stdout | length > 0

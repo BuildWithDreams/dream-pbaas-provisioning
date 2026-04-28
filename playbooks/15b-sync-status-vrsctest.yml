@@ -1,0 +1,62 @@
+# Playbook: 15b-sync-status-vrsctest.yml
+# Purpose: Check sync status for VRSCTEST testnet chain on BWD.
+# Queries getinfo from the container and reports local block height,
+# network tip, sync gap, peer count, and TLS status.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbooks/15b-sync-status-vrsctest.yml
+
+---
+- name: Check VRSCTEST testnet sync status
+  hosts: production
+  gather_facts: false
+  vars:
+    ansible_user: dream-hermes-agent
+
+  tasks:
+    - name: Query VRSCTEST getinfo
+      ansible.builtin.shell:
+        cmd: docker exec dev200-vrsctest-1 verus -chain=VRSCTEST getinfo 2>&1
+      register: vrsctest_info
+      changed_when: false
+      failed_when: false
+
+    - name: Set default offline facts
+      ansible.builtin.set_fact:
+        vrsctest_blocks: 0
+        vrsctest_longest: 0
+        vrsctest_tlptime: 0
+        vrsctest_peers: 0
+        vrsctest_tls: 0
+        vrsctest_gap: 0
+        vrsctest_tip_str: "N/A"
+        vrsctest_online: false
+      when: not (vrsctest_info.stdout is search('"blocks"'))
+
+    - name: Parse VRSCTEST fields
+      ansible.builtin.set_fact:
+        vrsctest_blocks: "{{ (vrsctest_info.stdout | from_json).blocks }}"
+        vrsctest_longest: "{{ (vrsctest_info.stdout | from_json).longestchain }}"
+        vrsctest_tlptime: "{{ (vrsctest_info.stdout | from_json).tiptime }}"
+        vrsctest_peers: "{{ (vrsctest_info.stdout | from_json).connections }}"
+        vrsctest_tls: "{{ (vrsctest_info.stdout | from_json).tls_established }}"
+        vrsctest_tip_str: "{{ '%Y-%m-%d %H:%M:%S' | strftime((vrsctest_info.stdout | from_json).tiptime | int) if (vrsctest_info.stdout | from_json).tiptime | int > 0 else 'N/A' }}"
+        vrsctest_online: true
+      when: vrsctest_info.stdout is search('"blocks"')
+
+    - name: Display sync status report
+      ansible.builtin.debug:
+        msg: |
+          {% if vrsctest_online %}
+          ╔═══════════════════════════════════════════════════════════╗
+          ║         VRSCTEST Testnet Sync Status — BWD                  ║
+          ╠══════════════╦═══════════════╦══════════╦═══════════════════╣
+          ║ Chain        ║ Local / Tip   ║ Gap      ║ Peers / TLS       ║
+          ╠══════════════╬═══════════════╬══════════╬═══════════════════╣
+          ║ VRSCTEST     ║ {{ '%07d' % (vrsctest_blocks | int) }} / {{ '%07d' % (vrsctest_longest | int) }} ║ {{ '%+7d' | format((vrsctest_longest | int) - (vrsctest_blocks | int)) }} ║ {{ '%3d' % (vrsctest_peers | int) }} / {{ vrsctest_tls | int }}         ║
+          ╚══════════════╩═══════════════╩══════════╩═══════════════════╝
+          Tip timestamp: {{ vrsctest_tip_str }}
+          {% else %}
+          VRSCTEST is offline or still starting.
+          Last output: {{ vrsctest_info.stderr | default(vrsctest_info.stdout) }}
+          {% endif %}

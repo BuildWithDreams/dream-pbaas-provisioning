@@ -1,0 +1,110 @@
+# Playbook: 33-spa-rvt-update.yml
+# Purpose: Update and redeploy the RVT Vue SPA on the target host.
+#          Pulls latest from GitHub, rebuilds with Vite, and reloads Caddy.
+# Run with: ansible-playbook -i inventory.ini playbooks/33-spa-rvt-update.yml
+# Idempotent: safe to re-run at any time. Caddy route must already exist (run 32 once before).
+---
+- name: Update and redeploy RVT SPA
+  hosts: production
+  become: false
+  vars:
+    rvt_repo_url: "https://github.com/BuildWithDreams/rvt.git"
+    rvt_path: "/home/{{ ansible_user }}/rvt"
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    rvt_container_root: "/srv/rvt/dist"
+    rvt_domain: "rvt.buildwithdreams.com"
+
+  tasks:
+    # ── 1. Verify rvt repo exists ───────────────────────────────────────────────
+    - name: Verify rvt directory exists
+      ansible.builtin.stat:
+        path: "{{ rvt_path }}"
+      register: rvt_dir_stat
+      failed_when: not rvt_dir_stat.stat.exists
+
+    # ── 2. Pull latest from GitHub ──────────────────────────────────────────────
+    - name: Pull latest RVT changes from GitHub
+      ansible.builtin.git:
+        repo: "{{ rvt_repo_url }}"
+        dest: "{{ rvt_path }}"
+        update: true
+        accept_hostkey: true
+      register: git_pull_result
+
+    - name: Display pull status
+      ansible.builtin.debug:
+        msg: "{{ 'Updated to latest commit' if git_pull_result.changed else 'Already up-to-date — no changes pulled' }}"
+
+    # ── 3. Build the Vue SPA ─────────────────────────────────────────────────────
+    - name: Build RVT SPA with Vite
+      ansible.builtin.shell:
+        cmd: >
+          docker run --rm
+          -v {{ rvt_path }}:/srv/app
+          -w /srv/app
+          node:alpine
+          sh -c "npm install --silent && npm run build"
+      register: build_result
+      changed_when: true
+      failed_when: false
+
+    - name: Verify build directory was created
+      ansible.builtin.stat:
+        path: "{{ rvt_path }}/build"
+      register: dist_stat
+
+    - name: Fail if build not created
+      ansible.builtin.fail:
+        msg: "Build failed — {{ rvt_path }}/build was not created. Check build output above."
+      when: not dist_stat.stat.exists
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg: "Build complete — dist/ refreshed at {{ rvt_path }}/build"
+
+    # ── 4. Verify Caddyfile exists ──────────────────────────────────────────────
+    - name: Verify Caddyfile exists
+      ansible.builtin.stat:
+        path: "{{ caddy_path }}/Caddyfile"
+      register: caddyfile_stat
+      failed_when: not caddyfile_stat.stat.exists
+
+    # ── 5. Validate Caddyfile syntax ───────────────────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      failed_when: false
+      changed_when: false
+
+    - name: Abort if Caddyfile invalid
+      ansible.builtin.fail:
+        msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
+      when: caddy_validate.rc != 0
+
+    # ── 6. Reload Caddy ─────────────────────────────────────────────────────────
+    - name: Reload Caddy to serve updated build
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      failed_when: false
+      changed_when: true
+
+    - name: Display reload result
+      ansible.builtin.debug:
+        msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
+
+    # ── 7. Summary ──────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          RVT SPA redeployed:
+            URL      → https://{{ rvt_domain }}
+            Source   → {{ rvt_path }}/build
+            Git      → {{ 'updated' if git_pull_result.changed else 'already current' }}
+            Build    → refreshed
+            Caddy    → reloaded
+
+          Verify:
+            curl -I https://{{ rvt_domain }}

@@ -10,9 +10,16 @@
   vars:
     # Add repositories here: { repo: "git@github.com:org/repo.git", dest: "~/repo-name" }
     clone_repos:
-      - { repo: "https://github.com/BuildWithDreams/docker-verusd.git", dest: "/home/{{ ansible_user }}/{{ clone_destinations.docker_verusd }}" }
+      - { repo: "https://github.com/BuildWithDreams/docker-verusd.git", dest: "/home/{{ ansible_user }}/{{ clone_destinations.docker_verusd }}", branch: "feature/vrsctest" }
 
   tasks:
+    - name: Reset any local changes before clone
+      ansible.builtin.shell:
+        cmd: "git -C {{ item.dest }} fetch origin && git -C {{ item.dest }} reset --hard origin/{{ item.branch }} 2>&1"
+      loop: "{{ clone_repos }}"
+      when: item.branch is defined
+      register: repo_reset
+
     - name: Clone repository
       ansible.builtin.git:
         repo: "{{ item.repo }}"
@@ -20,6 +27,8 @@
         clone: true
         update: true
         accept_hostkey: true
+        version: "{{ item.branch | default('main') }}"
+        force: true
       loop: "{{ clone_repos }}"
       register: clone_result
 
