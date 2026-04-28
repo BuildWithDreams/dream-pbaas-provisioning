@@ -1,0 +1,113 @@
+# Playbook: 16b-add-vrsctest-rpc-allowip.yml
+# Purpose: Add rpcallowip entry for the VRSCTEST Docker network subnet to vrsctest.conf.
+#          Idempotent — safe to run multiple times; only adds if not already present.
+#
+# ⚠️  Run AFTER shutting down vRSCTEST (so config is not locked).
+#     The daemon must be restarted after config changes.
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/16b-add-vrsctest-rpc-allowip.yml
+#
+# What it does:
+#   1. Detect the actual subnet of net-vrsctest via docker network inspect
+#   2. Append rpcallowip=<subnet> to vrsctest.conf only if not already present (lineinfile, idempotent)
+#   3. Confirm what was added / already existed
+
+---
+- name: Add vRSCTEST rpcallowip for Docker network
+  hosts: production
+  become: false
+  vars:
+    vrsctest_path: "/home/{{ ansible_user }}/docker-verusd/vrsctest"
+    conf_file: "{{ vrsctest_path }}/data_dir/vrsctest/vrsctest.conf"
+
+  tasks:
+    # 1. Verify vRSCTEST Docker network exists and get its subnet
+    - name: Inspect net-vrsctest subnet
+      ansible.builtin.shell:
+        cmd: "docker network inspect net-vrsctest | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d[0]['IPAM']['Config'][0]['Subnet'])\""
+      register: vrsctest_network_subnet
+      changed_when: false
+
+    - name: Display detected subnet
+      ansible.builtin.debug:
+        msg: "net-vrsctest subnet: {{ vrsctest_network_subnet.stdout }}"
+
+    - name: Fail if network not found
+      ansible.builtin.fail:
+        msg: "net-vrsctest not found. Run 03-docker-networks.yml first."
+      when: vrsctest_network_subnet.stdout | length == 0
+
+    # 2. Build rpcallowip line from subnet
+    - name: Derive rpcallowip line value
+      ansible.builtin.set_fact:
+        rpcallowip_subnet: "{{ vrsctest_network_subnet.stdout | regex_replace('/\\d+$', '') }}"
+        rpcallowip_line: "rpcallowip={{ vrsctest_network_subnet.stdout | regex_replace('/\\d+$', '') }}/{{ vrsctest_network_subnet.stdout | regex_replace('.*/', '') }}"
+
+    - name: Display rpcallowip entry
+      ansible.builtin.debug:
+        msg: "Will add: {{ rpcallowip_line }}"
+
+    # 3. Check conf file exists
+    - name: Check vrsctest.conf exists
+      ansible.builtin.shell:
+        cmd: "test -f {{ conf_file }} && echo present || echo missing"
+      register: conf_check
+      changed_when: false
+
+    - name: Fail if vrsctest.conf missing
+      ansible.builtin.fail:
+        msg: |
+          vrsctest.conf not found: {{ conf_file }}
+          Start vRSCTEST first so the config is generated.
+      when: conf_check.stdout != "present"
+
+    # 4. Read current conf to check if rpcallowip already present
+    - name: Read current vrsctest.conf
+      ansible.builtin.slurp:
+        src: "{{ conf_file }}"
+      register: conf_b64
+
+    - name: Decode conf
+      ansible.builtin.set_fact:
+        conf_content: "{{ conf_b64.content | b64decode }}"
+
+    - name: Show existing rpcallowip entries
+      ansible.builtin.debug:
+        msg: |
+          Existing rpcallowip lines:
+          {{ conf_content.splitlines() | select('search', '^rpcallowip=') | list | join('\n') or '(none)' }}
+
+    # 5. Add rpcallowip for Docker network subnet (idempotent)
+    - name: Add rpcallowip subnet entry
+      ansible.builtin.lineinfile:
+        path: "{{ conf_file }}"
+        line: "{{ rpcallowip_line }}"
+        regexp: "^rpcallowip={{ rpcallowip_subnet }}/"
+        state: present
+      register: rpc_line_added
+
+    - name: Confirm change
+      ansible.builtin.debug:
+        msg: "{{ '✅ Added rpcallowip entry to vrsctest.conf' if rpc_line_added.changed else 'ℹ️  rpcallowip entry already present — no change made' }}"
+
+    # 6. Read back and confirm final state
+    - name: Read updated vrsctest.conf
+      ansible.builtin.slurp:
+        src: "{{ conf_file }}"
+      register: updated_conf_b64
+
+    - name: Decode updated conf
+      ansible.builtin.set_fact:
+        updated_conf: "{{ updated_conf_b64.content | b64decode }}"
+
+    - name: Show final rpcallowip block
+      ansible.builtin.debug:
+        msg: |
+          Final rpcallowip entries in {{ conf_file }}:
+          {{ updated_conf.splitlines() | select('search', '^rpcallowip=') | list | join('\n') }}
+
+    - name: Next step reminder
+      ansible.builtin.debug:
+        msg: |
+          ✅ RPC allowip configured for vRSCTEST Docker network {{ vrsctest_network_subnet.stdout }}
+          Next: run playbook 08b-start-vrsctest.yml to start vRSCTEST with the updated config.
