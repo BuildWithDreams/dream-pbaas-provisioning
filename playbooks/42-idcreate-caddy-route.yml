@@ -66,11 +66,12 @@
         msg: "Caddyfile updated — idcreate.vrsctest route block {{ 'added' if caddyfile_updated.changed else 'already present' }}"
       when: route_check.stdout == 'absent'
 
-    # ── 4. Format Caddyfile after changes ───────────────────────────────────────
-    - name: Format Caddyfile
+    # ── 4. Copy updated Caddyfile into container ───────────────────────────────
+    # The blockinfile task wrote to the host path; copy it into the read-only container mount
+    - name: Copy formatted Caddyfile into container
       ansible.builtin.shell:
-        cmd: "docker exec {{ caddy_container }} caddy fmt --overwrite /config/caddy/Caddyfile 2>&1"
-      register: caddy_fmt
+        cmd: "docker cp {{ caddy_path }}/Caddyfile {{ caddy_container }}:/config/caddy/Caddyfile"
+      register: caddy_copy
       changed_when: true
       when: route_check.stdout == 'absent'
 
@@ -81,6 +82,7 @@
       register: caddy_validate
       failed_when: false
       changed_when: false
+      when: caddy_copy.changed
 
     - name: Abort if Caddyfile invalid
       ansible.builtin.fail:
@@ -93,7 +95,7 @@
         cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
       register: caddy_reload
       failed_when: false
-      changed_when: route_check.stdout == 'absent'
+      when: caddy_copy.changed
 
     - name: Display reload result
       ansible.builtin.debug:
@@ -106,12 +108,12 @@
       register: upstream_health
       changed_when: false
       failed_when: false
-      when: route_check.stdout == 'absent'
+      when: caddy_copy.changed
 
     - name: Warn if upstream unreachable
       ansible.builtin.debug:
         msg: "WARNING: Upstream at {{ idcreate_bind_ip }}:{{ idcreate_api_port }} did not respond. Route is configured but app may be down."
-      when: route_check.stdout == 'absent' and upstream_health.stdout == 'unreachable'
+      when: caddy_copy.changed and upstream_health.stdout == 'unreachable'
 
     # ── 8. Summary ──────────────────────────────────────────────────────────────
     - name: Display deployment summary
