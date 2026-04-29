@@ -12,9 +12,9 @@ Deploy `svc-idcreate` (FastAPI identity creation service + background worker) on
 
 The service:
 - Exposes an external API (`/api/provisioning/challenge`, `/api/provisioning/request`, `/api/provisioning/status/{id}`)
-- Connects to the **VRSCTEST** verusd daemon via RPC to sign and submit on-chain identity registrations
+- Connects to the **VRSCTEST** verusd daemon via the `DAEMON_VERUSD_VRSC` slot + `NATIVE_COIN="VRSCTEST"` (VRSCTEST hijacks the VRSC slot in `SFConstants.py`)
 - Runs a background worker that polls pending registrations and advances their state
-- Uses a companion `svc-provisioning` HTTP adapter for primitive cryptographic operations
+- **Provisioning service not included** — not ready yet, focus is on the id creation base Python service
 
 ---
 
@@ -51,26 +51,20 @@ The service reads daemon RPC config from environment variables named after the p
 
 | Daemon name | Chain | Notes |
 |-------------|-------|-------|
-| `verusd_vrsc` | VRSC mainnet | — |
-| `verusd_varrr` | vARRR PBaaS | — |
-| `verusd_vdex` | vDEX PBaaS | — |
-| `verusd_chips` | CHIPS PBaaS | — |
+| `DAEMON_VERUSD_VRSC` | VRSCTEST | **Hijacks the VRSC slot** via `NATIVE_COIN="VRSCTEST"` — no separate VRSCTEST slot exists |
 
-The VRSCTEST chain does NOT appear in `SFConstants.py` directly — it uses the `DAEMON_VERUSD_VRSC` slot with `NATIVE_COIN="VRSCTEST"` to connect to VRSCTEST via the VRSC mainnet daemon's _cross-chain_ RPC (or the VRSCTEST daemon itself).
-
-> **Review needed:** Confirm whether `SFConstants.py` maps `DAEMON_VERUSD_VRSC` + `NATIVE_COIN="VRSCTEST"` to the VRSCTEST daemon (10.200.0.11:27486) or to VRSC mainnet. This affects which RPC credentials are written to `.env`.
-
-For deployment, the following RPC env vars must be set in `.env`:
+For deployment, the following RPC env vars are written to `.env` by playbook 41:
 
 ```
 verusd_vrsc_rpc_enabled="true"
-verusd_vrsc_rpc_user="dream"
-verusd_vrsc_rpc_password="<from vrsctest .env RPCPASS>"
-verusd_vrsc_rpc_port="27486"
+verusd_vrsc_rpc_user="<from vrsctest.conf>"
+verusd_vrsc_rpc_password="<from vrsctest.conf>"
+verusd_vrsc_rpc_port="18842"
 verusd_vrsc_rpc_host="10.200.0.11"
+NATIVE_COIN="VRSCTEST"
 ```
 
-> **RPC allowip:** The VRSCTEST daemon must have `rpcallowip=10.200.0.0/24` in its config to accept connections from the idcreate container. This is likely already set via playbook 16b.
+> **RPC allowip:** The VRSCTEST daemon must have `rpcallowip=10.200.0.0/24` in its config — already set via playbook 16b.
 
 ---
 
@@ -130,13 +124,13 @@ verusd_vrsc_rpc_host="10.200.0.11"
 | Compose project | `dev200_idcreate` | VRSCTEST uses `dev200` prefix |
 | Container (API) | `dev200_idcreate-api-1` | Auto-generated |
 | Container (Worker) | `dev200_idcreate-worker-1` | Auto-generated |
-| Container (Provisioning) | `dev200_idcreate-provisioning-1` | Auto-generated |
 | Image | `buildwithdreams/svc-idcreate:local` | Built locally |
 | Domain | `idcreate.vrsctest.buildwithdreams.com` | This spec |
 | Upstream for Caddy | `10.200.0.14:5003` | This spec |
 | NATIVE_COIN | `VRSCTEST` | This spec |
 | HEALTH_RPC_DAEMON | `verusd_vrsc` | svc-idcreate default |
-| RPC host for VRSCTEST | `10.200.0.11:27486` | VRSCTEST daemon |
+| RPC host for VRSCTEST | `10.200.0.11:18842` | VRSCTEST daemon (port 18842) |
+| SFConstants slot | `DAEMON_VERUSD_VRSC` | VRSCTEST hijacks the VRSC slot via `NATIVE_COIN="VRSCTEST"` |
 
 ---
 
@@ -164,10 +158,18 @@ Caddy is already on `net-vrsctest` (added by `37-qrcodes-caddy-network.yml` duri
 
 ---
 
-## 11. Open Questions
+## 11. Out of Scope
 
-- [ ] **SFConstants mapping:** Confirm whether `DAEMON_VERUSD_VRSC` + `NATIVE_COIN="VRSCTEST"` points to VRSCTEST daemon (`10.200.0.11:27486`). If the VRSCTEST chain uses a different daemon name slot in `SFConstants.py`, update the `.env` var names accordingly.
-- [ ] **Provisioning DNS name:** `PROVISIONING_SERVICE_URL` is set to `http://idcreate-provisioning:5055` (Docker DNS hostname). Confirm this matches what `HttpProvisioningAdapter` expects.
+- Provisioning service (svc-provisioning companion) — not ready yet
+- API key provisioning (operator manages `REGISTRAR_API_KEYS`)
+- Source of funds / Z-address population (operator sets in `.env`)
+- Horizontal scaling (single replica only)
+- PBaaS chain identity registration (VRSCTEST only for now)
+
+## 12. Open Questions
+
+- [ ] **SFConstants mapping confirmed:** `DAEMON_VERUSD_VRSC` + `NATIVE_COIN="VRSCTEST"` points to VRSCTEST daemon at `10.200.0.11:18842` ✅
+- [ ] **Provisioning service:** to be added once it's working
 
 ---
 

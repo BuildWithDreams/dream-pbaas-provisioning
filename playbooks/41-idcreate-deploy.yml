@@ -14,7 +14,6 @@
     docker_network: "net-vrsctest"
     idcreate_bind_ip: "10.200.0.14"
     idcreate_api_port: "5003"
-    provisioning_port: "5055"
     image_name: "buildwithdreams/svc-idcreate"
     image_tag: "local"
 
@@ -106,7 +105,7 @@
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^verusd_vrsc_rpc_port\s*='
-        line: 'verusd_vrsc_rpc_port="27486"'
+        line: 'verusd_vrsc_rpc_port="18842"'
         state: present
 
     - name: Set verusd_vrsc_rpc_host
@@ -130,20 +129,6 @@
         line: 'HEALTH_RPC_DAEMON="verusd_vrsc"'
         state: present
 
-    - name: Set PROVISIONING_SERVICE_URL (Docker DNS name)
-      ansible.builtin.lineinfile:
-        path: "{{ idcreate_path }}/.env"
-        regexp: '^PROVISIONING_SERVICE_URL='
-        line: 'PROVISIONING_SERVICE_URL="http://idcreate-provisioning:5055"'
-        state: present
-
-    - name: Set PROVISIONING_ADAPTER_MODE
-      ansible.builtin.lineinfile:
-        path: "{{ idcreate_path }}/.env"
-        regexp: '^PROVISIONING_ADAPTER_MODE='
-        line: 'PROVISIONING_ADAPTER_MODE="http"'
-        state: present
-
     - name: Show updated .env RPC vars
       ansible.builtin.debug:
         msg: |
@@ -151,11 +136,10 @@
             verusd_vrsc_rpc_enabled  = true
             verusd_vrsc_rpc_user     = {{ vrsctest_rpcuser }}
             verusd_vrsc_rpc_password = <redacted>
-            verusd_vrsc_rpc_port     = 27486
+            verusd_vrsc_rpc_port     = 18842
             verusd_vrsc_rpc_host     = 10.200.0.11
             NATIVE_COIN              = VRSCTEST
             HEALTH_RPC_DAEMON        = verusd_vrsc
-            PROVISIONING_SERVICE_URL  = http://idcreate-provisioning:5055
 
     # ── 6. Write docker-compose.yml ───────────────────────────────────────────────
     - name: Create docker-compose.yml
@@ -163,29 +147,10 @@
         content: |
           # docker-compose.yml — svc-idcreate (VRSCTEST / dev200)
           # Built from: {{ image_name }}:{{ image_tag }}
+          # Note: provisioning service not included — not ready yet
           version: "3.9"
 
           services:
-            provisioning:
-              build:
-                context: .
-                args:
-                  UV_LINK_MODE: copy
-              container_name: {{ compose_project }}-provisioning-1
-              hostname: idcreate-provisioning
-              ports:
-                - "127.0.0.1:{{ provisioning_port }}:{{ provisioning_port }}"
-              environment:
-                - PORT={{ provisioning_port }}
-                - NODE_BIN=node
-                - PROVISIONING_SCRIPT_ROOT=/workspace/svc-idcreate/provisioning
-              volumes:
-                - .:/workspace:ro
-              restart: unless-stopped
-              networks:
-                pbaas_network:
-                  ipv4_address: {{ idcreate_bind_ip }}
-
             api:
               image: {{ image_name }}:{{ image_tag }}
               container_name: {{ compose_project }}-api-1
@@ -270,8 +235,7 @@
             compose project → {{ compose_project }}
             network        → {{ docker_network }}
             API IP         → {{ idcreate_bind_ip }}:{{ idcreate_api_port }}
-            provisioning   → {{ idcreate_bind_ip }}:{{ provisioning_port }} (host-only)
-            containers      → {{ compose_project }}-api-1, {{ compose_project }}-worker-1, {{ compose_project }}-provisioning-1
+            containers      → {{ compose_project }}-api-1, {{ compose_project }}-worker-1
             image          → {{ image_name }}:{{ image_tag }}
 
           Verify:
