@@ -11,11 +11,20 @@
   vars:
     caddy_path: "/home/{{ ansible_user }}/caddy"
     caddy_container: "mains_blue_caddy-caddy-1"
+    docker_network: "net-vrsctest"
     qr_bind_ip: "10.200.0.13"
     qr_port: "3000"
     qr_domain: "qrcodes.vrsctest.buildwithdreams.com"
 
   tasks:
+    # ── 0. Pre-flight: verify Caddy is on net-vrsctest ──────────────────────────
+    - name: Verify Caddy is connected to net-vrsctest (pre-flight)
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ docker_network }} --format '{{range .Containers}}{{.Name}} {{end}}' | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'missing'"
+      register: caddy_network_preflight
+      changed_when: false
+      failed_when: caddy_network_preflight.stdout != 'ok'
+
     # ── 1. Validate Caddyfile exists ────────────────────────────────────────────
     - name: Verify Caddyfile exists
       ansible.builtin.stat:
@@ -23,7 +32,7 @@
       register: caddyfile_stat
       failed_when: not caddyfile_stat.stat.exists
 
-    # ── 2. Check if route already exists ───────────────────────────────────────
+    # ── 2. Check if route already exists ────────────────────────────────────────
     - name: Check if qrcodes.vrsctest route already in Caddyfile
       ansible.builtin.shell:
         cmd: "grep -q 'qrcodes.vrsctest.buildwithdreams.com' {{ caddy_path }}/Caddyfile && echo 'present' || echo 'absent'"
@@ -56,7 +65,15 @@
         msg: "Caddyfile updated — qrcodes.vrsctest route block {{ 'added' if caddyfile_updated.changed else 'already present' }}"
       when: route_check.stdout == 'absent'
 
-    # ── 4. Verify Caddyfile is valid before reload ─────────────────────────────
+    # ── 4. Format Caddyfile after changes ───────────────────────────────────────
+    - name: Format Caddyfile
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy fmt --overwrite /config/caddy/Caddyfile 2>&1"
+      register: caddy_fmt
+      changed_when: true
+      when: route_check.stdout == 'absent'
+
+    # ── 5. Verify Caddyfile is valid before reload ─────────────────────────────
     - name: Validate Caddyfile syntax
       ansible.builtin.shell:
         cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
@@ -69,19 +86,33 @@
         msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
       when: caddy_validate.rc != 0
 
-    # ── 5. Reload Caddy ─────────────────────────────────────────────────────────
+    # ── 6. Reload Caddy (only when route was added) ─────────────────────────────
     - name: Reload Caddy to apply new route
       ansible.builtin.shell:
         cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
       register: caddy_reload
       failed_when: false
-      changed_when: true
+      changed_when: route_check.stdout == 'absent'
 
     - name: Display reload result
       ansible.builtin.debug:
         msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
 
-    # ── 6. Summary ──────────────────────────────────────────────────────────────
+    # ── 7. Health check: verify upstream is reachable from Caddy ───────────────
+    - name: Health check — upstream qrcodes app
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} wget -q -O - --timeout=5 http://{{ qr_bind_ip }}:{{ qr_port }}/ 2>&1 | head -1 || echo 'unreachable'"
+      register: upstream_health
+      changed_when: false
+      failed_when: false
+      when: route_check.stdout == 'absent'
+
+    - name: Warn if upstream unreachable
+      ansible.builtin.debug:
+        msg: "WARNING: Upstream at {{ qr_bind_ip }}:{{ qr_port }} did not respond. Route is configured but app may be down."
+      when: route_check.stdout == 'absent' and upstream_health.stdout == 'unreachable'
+
+    # ── 8. Summary ──────────────────────────────────────────────────────────────
     - name: Display deployment summary
       ansible.builtin.debug:
         msg: |
