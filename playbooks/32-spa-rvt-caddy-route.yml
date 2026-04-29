@@ -78,19 +78,33 @@
         msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
       when: caddy_validate.rc != 0
 
-    # ── 6. Reload Caddy ─────────────────────────────────────────────────────────
+    # ── 6. Reload Caddy (only when route was added) ─────────────────────────────
     - name: Reload Caddy to apply new route
       ansible.builtin.shell:
         cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
       register: caddy_reload
       failed_when: false
-      changed_when: true
+      changed_when: route_check.stdout == 'absent'
 
     - name: Display reload result
       ansible.builtin.debug:
         msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
 
-    # ── 7. Summary ──────────────────────────────────────────────────────────────
+    # ── 7. Health check: verify upstream is reachable from Caddy ───────────────
+    - name: Health check — upstream RVT dist
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} wget -q -O - --timeout=5 http://{{ rvt_container_root }}/index.html 2>&1 | head -1 || echo 'unreachable'"
+      register: upstream_health
+      changed_when: false
+      failed_when: false
+      when: route_check.stdout == 'absent'
+
+    - name: Warn if upstream unreachable
+      ansible.builtin.debug:
+        msg: "WARNING: RVT dist at {{ rvt_container_root }} did not respond. Route is configured but files may be missing."
+      when: route_check.stdout == 'absent' and upstream_health.stdout == 'unreachable'
+
+    # ── 8. Summary ──────────────────────────────────────────────────────────────
     - name: Display deployment summary
       ansible.builtin.debug:
         msg: |
