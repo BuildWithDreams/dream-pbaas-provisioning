@@ -59,7 +59,7 @@ For deployment, the following RPC env vars are written to `.env` by playbook 41:
 verusd_vrsc_rpc_enabled="true"
 verusd_vrsc_rpc_user="<from vrsctest.conf>"
 verusd_vrsc_rpc_password="<from vrsctest.conf>"
-verusd_vrsc_rpc_port="18842"
+verusd_vrsc_rpc_port="18843"
 verusd_vrsc_rpc_host="10.200.0.11"
 NATIVE_COIN="VRSCTEST"
 ```
@@ -129,7 +129,7 @@ NATIVE_COIN="VRSCTEST"
 | Upstream for Caddy | `10.200.0.14:5003` | This spec |
 | NATIVE_COIN | `VRSCTEST` | This spec |
 | HEALTH_RPC_DAEMON | `verusd_vrsc` | svc-idcreate default |
-| RPC host for VRSCTEST | `10.200.0.11:18842` | VRSCTEST daemon (port 18842) |
+| RPC host for VRSCTEST | `10.200.0.11:18843` | VRSCTEST daemon (port 18843) |
 | SFConstants slot | `DAEMON_VERUSD_VRSC` | VRSCTEST hijacks the VRSC slot via `NATIVE_COIN="VRSCTEST"` |
 
 ---

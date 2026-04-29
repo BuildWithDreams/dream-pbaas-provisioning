@@ -105,7 +105,7 @@
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^verusd_vrsc_rpc_port\s*='
-        line: 'verusd_vrsc_rpc_port="18842"'
+        line: 'verusd_vrsc_rpc_port="18843"'
         state: present
 
     - name: Set verusd_vrsc_rpc_host
@@ -136,7 +136,7 @@
             verusd_vrsc_rpc_enabled  = true
             verusd_vrsc_rpc_user     = {{ vrsctest_rpcuser }}
             verusd_vrsc_rpc_password = <redacted>
-            verusd_vrsc_rpc_port     = 18842
+            verusd_vrsc_rpc_port     = 18843
             verusd_vrsc_rpc_host     = 10.200.0.11
             NATIVE_COIN              = VRSCTEST
             HEALTH_RPC_DAEMON        = verusd_vrsc
