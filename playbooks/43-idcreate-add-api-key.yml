@@ -1,0 +1,66 @@
+# Playbook: 43-idcreate-add-api-key.yml
+# Purpose: Generate and persist a test API key (REGISTRAR_API_KEYS) for svc-idcreate on VRSCTEST.
+#          Idempotent — safe to re-run. Only writes the key if REGISTRAR_API_KEYS is absent.
+# Run with: ansible-playbook -i inventory.ini playbooks/43-idcreate-add-api-key.yml
+---
+- name: Add REGISTRAR_API_KEYS to svc-idcreate .env
+  hosts: production
+  become: false
+  vars:
+    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
+
+  tasks:
+    # ── 1. Ensure .env exists ───────────────────────────────────────────────────
+    - name: Check if .env exists
+      ansible.builtin.stat:
+        path: "{{ idcreate_path }}/.env"
+      register: env_file_stat
+
+    - name: Fail if .env not found
+      ansible.builtin.fail:
+        msg: |
+          .env not found at {{ idcreate_path }}/.env.
+          Run playbook 41-idcreate-deploy.yml first to create it.
+      when: not env_file_stat.stat.exists
+
+    # ── 2. Check if REGISTRAR_API_KEYS is already set ───────────────────────────
+    - name: Read current REGISTRAR_API_KEYS value
+      ansible.builtin.shell:
+        cmd: "grep '^REGISTRAR_API_KEYS=' {{ idcreate_path }}/.env 2>/dev/null | cut -d '=' -f2- | tr -d '\"' | tr -d ' ' || echo '__NOT_FOUND__'"
+      register: existing_api_key
+      changed_when: false
+
+    # ── 3. Generate key only if missing ─────────────────────────────────────────
+    - name: Generate BWD_ test API key
+      ansible.builtin.shell:
+        cmd: "echo 'BWD_'$(openssl rand -hex 16)"
+      register: generated_api_key
+      when: existing_api_key.stdout == '__NOT_FOUND__' or existing_api_key.stdout | length == 0
+      changed_when: true
+
+    # ── 4. Write to .env ────────────────────────────────────────────────────────
+    - name: Set REGISTRAR_API_KEYS in .env
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^REGISTRAR_API_KEYS='
+        line: 'REGISTRAR_API_KEYS="{{ generated_api_key.stdout }}"'
+        state: present
+      when: existing_api_key.stdout == '__NOT_FOUND__' or existing_api_key.stdout | length == 0
+      register: api_key_written
+
+    # ── 5. Display result ───────────────────────────────────────────────────────
+    - name: Display result (key was missing — newly written)
+      ansible.builtin.debug:
+        msg: |
+          REGISTRAR_API_KEYS written to {{ idcreate_path }}/.env
+          Key: {{ generated_api_key.stdout }}
+          Use X-API-Key: {{ generated_api_key.stdout }} in requests.
+      when: api_key_written.changed | default(false)
+
+    - name: Display result (key already present — no change)
+      ansible.builtin.debug:
+        msg: |
+          REGISTRAR_API_KEYS already set in {{ idcreate_path }}/.env — no change made.
+          Current value: {{ existing_api_key.stdout }}
+          Use X-API-Key: <your-key> in requests.
+      when: not (api_key_written.changed | default(false))

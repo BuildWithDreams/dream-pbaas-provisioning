@@ -117,6 +117,16 @@
       when: caddy_copy.changed and upstream_health.stdout == 'unreachable'
 
     # ── 8. Summary ──────────────────────────────────────────────────────────────
+    # ── LESSONS LEARNED ───────────────────────────────────────────────────────
+    # Issue 1: Caddyfile inside container is mounted read-only. blockinfile writes
+    # the host path, then `docker cp` copies into the container (read-only mount
+    # accepts writes via cp). Do NOT run `caddy fmt --overwrite` inside the container
+    # — it fails with "read-only file system". If fmt is needed, copy out first.
+    #
+    # Issue 2: All downstream tasks (validate, reload, health) must be gated on
+    # `when: caddy_copy.changed`. Without this, Ansible evaluates unregistered
+    # variables from skipped tasks and fails with "dict has no attribute 'rc'".
+    # ───────────────────────────────────────────────────────────────────────────
     - name: Display deployment summary
       ansible.builtin.debug:
         msg: |
