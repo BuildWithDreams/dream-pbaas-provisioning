@@ -1,0 +1,38 @@
+# Playbook: 39-idcreate-clone.yml
+# Purpose: Clone the BuildWithDreams/svc-idcreate repository.
+# Run with: ansible-playbook -i inventory.ini playbooks/39-idcreate-clone.yml
+# Idempotent: skips if /home/{{ ansible_user }}/svc-idcreate already exists, does git pull if already cloned.
+# Requires: nothing
+
+---
+- name: Clone svc-idcreate repository
+  hosts: production
+  become: false
+  vars:
+    idcreate_repo_url: "https://github.com/BuildWithDreams/svc-idcreate.git"
+    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
+
+  tasks:
+    - name: Check if svc-idcreate directory already exists
+      ansible.builtin.stat:
+        path: "{{ idcreate_path }}"
+      register: idcreate_dir_stat
+
+    - name: Display clone plan
+      ansible.builtin.debug:
+        msg: >
+          Clone {{ idcreate_repo_url }} to {{ idcreate_path }}.
+          {{ 'Directory exists — will pull latest.' if idcreate_dir_stat.stat.exists else 'Will clone fresh.' }}
+
+    - name: Clone or update repository
+      ansible.builtin.git:
+        repo: "{{ idcreate_repo_url }}"
+        dest: "{{ idcreate_path }}"
+        clone: "{{ not idcreate_dir_stat.stat.exists }}"
+        update: true
+        accept_hostkey: true
+      register: clone_result
+
+    - name: Display clone status
+      ansible.builtin.debug:
+        msg: "{{ 'Cloned fresh repository' if clone_result.changed else 'Repository already up-to-date' }}"

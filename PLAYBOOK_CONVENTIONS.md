@@ -164,3 +164,7 @@ Known IDs (confirmed on BWD):
 | `27-qr-creator-deploy.yml` | Build + deploy QR creator on net-vrsc-blue (.13) |
 | `28-caddy-deploy.yml` | Deploy Caddy reverse proxy + Lets Encrypt on net-vrsc-blue (.10) |
 | `29-caddy-teardown.yml` | Remove Caddy container, compose project, and data |
+| `39-idcreate-clone.yml` | Clone BuildWithDreams/svc-idcreate repo |
+| `40-idcreate-build.yml` | Build svc-idcreate Docker image |
+| `41-idcreate-deploy.yml` | Deploy idcreate stack (api + worker) on net-vrsctest (.14) |
+| `42-idcreate-caddy-route.yml` | Add idcreate.vrsctest Caddy route + extend Caddy to net-vrsctest |

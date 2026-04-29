@@ -1,0 +1,68 @@
+# Playbook: 40-idcreate-build.yml
+# Purpose: Build the svc-idcreate Docker image.
+# Run with: ansible-playbook -i inventory.ini playbooks/40-idcreate-build.yml
+#           Or with force rebuild: ansible-playbook -i inventory.ini playbooks/40-idcreate-build.yml -e idcreate_rebuild=true
+# Requires: 39-idcreate-clone.yml (repo cloned)
+# Idempotent: skips if buildwithdreams/svc-idcreate:local already exists, unless idcreate_rebuild=true
+
+---
+- name: Build svc-idcreate Docker image
+  hosts: production
+  become: false
+  vars:
+    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
+    image_name: "buildwithdreams/svc-idcreate"
+    rebuild: "{{ idcreate_rebuild | default(false) | bool }}"
+
+  tasks:
+    # ── 1. Verify repo exists ─────────────────────────────────────────────────
+    - name: Verify svc-idcreate directory exists
+      ansible.builtin.stat:
+        path: "{{ idcreate_path }}"
+      register: idcreate_dir_stat
+      failed_when: not idcreate_dir_stat.stat.exists
+
+    # ── 2. Check if image already exists ───────────────────────────────────────
+    - name: Check for existing local image
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:local > /dev/null 2>&1 && echo 'exists' || echo 'missing'"
+      register: image_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Display build plan
+      ansible.builtin.debug:
+        msg: >
+          Image {{ image_name }}:local — {{ 'will be built' if rebuild or image_exists.stdout != 'exists' else 'already exists (skipping, use -e idcreate_rebuild=true to override)' }}
+
+    # ── 3. Build Docker image ─────────────────────────────────────────────────
+    - name: Build Docker image
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker build --no-cache -t {{ image_name }}:local -t {{ image_name }}:latest ."
+      register: build_result
+      when: rebuild or image_exists.stdout != 'exists'
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg: "Build {{ 'started' if (rebuild or image_exists.stdout != 'exists') else 'skipped' }}: {{ image_name }}:local"
+      when: rebuild or image_exists.stdout != 'exists'
+
+    - name: Display build output
+      ansible.builtin.debug:
+        msg: "{{ build_result.stdout_lines | join('\\n') }}"
+      when: rebuild or image_exists.stdout != 'exists'
+      failed_when: false
+
+    # ── 4. Verify image was created ───────────────────────────────────────────
+    - name: Verify image exists after build
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:local > /dev/null 2>&1 && echo 'ok'"
+      register: image_verify
+      changed_when: false
+      failed_when: false
+      when: rebuild or image_exists.stdout != 'exists'
+
+    - name: Confirm image built
+      ansible.builtin.debug:
+        msg: "Image {{ image_name }}:local built successfully"
+      when: rebuild or image_exists.stdout != 'exists'

@@ -1,0 +1,207 @@
+# Playbook: 42-idcreate-caddy-route.yml
+# Purpose: Add idcreate.vrsctest.buildwithdreams.com route to Caddy and extend
+#          Caddy to net-vrsctest so it can proxy to 10.200.0.14.
+# Run with: ansible-playbook -i inventory.ini playbooks/42-idcreate-caddy-route.yml
+# Requires: 41-idcreate-deploy.yml (idcreate must be deployed first)
+# Idempotent: safe to re-run — rebuilds Caddyfile + rewrites compose only if route absent.
+
+---
+- name: Add idcreate Caddy route + extend Caddy to net-vrsctest
+  hosts: production
+  become: false
+  vars:
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddyfile_path: "{{ caddy_path }}/Caddyfile"
+    compose_file: "{{ caddy_path }}/docker-compose.yml"
+    container_name: "mains_blue_caddy-caddy-1"
+    compose_project: "mains_blue_caddy"
+    idcreate_domain: "idcreate.vrsctest.buildwithdreams.com"
+    idcreate_upstream: "10.200.0.14:5003"
+    docker_network_vrsctest: "net-vrsctest"
+
+  tasks:
+    # ── 1. Validate prerequisites ────────────────────────────────────────────────
+    - name: Check that Caddyfile exists
+      ansible.builtin.stat:
+        path: "{{ caddyfile_path }}"
+      register: caddyfile_stat
+      failed_when: not caddyfile_stat.stat.exists
+
+    - name: Check that docker-compose.yml exists
+      ansible.builtin.stat:
+        path: "{{ compose_file }}"
+      register: compose_stat
+      failed_when: not compose_stat.stat.exists
+
+    - name: Check that idcreate container is reachable (upstream must exist)
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep 'test_blue_idcreate-api-1' | head -1 || true"
+      register: idcreate_check
+      changed_when: false
+      failed_when: false
+
+    - name: Warn if idcreate not deployed
+      ansible.builtin.debug:
+        msg: "⚠️  idcreate container not detected. Run 41-idcreate-deploy.yml first."
+      when: idcreate_check.stdout | length == 0
+
+    # ── 2. Read current Caddyfile ────────────────────────────────────────────────
+    - name: Slurp current Caddyfile
+      ansible.builtin.slurp:
+        src: "{{ caddyfile_path }}"
+      register: caddyfile_b64
+
+    - name: Decode Caddyfile
+      ansible.builtin.set_fact:
+        caddyfile_content: "{{ caddyfile_b64.content | b64decode }}"
+
+    # ── 3. Check if idcreate route already exists ───────────────────────────────
+    - name: Check if idcreate route already in Caddyfile
+      ansible.builtin.set_fact:
+        idcreate_route_present: "{{ idcreate_domain in caddyfile_content }}"
+
+    - name: Display Caddyfile status
+      ansible.builtin.debug:
+        msg: "{{ 'idcreate route already present in Caddyfile' if idcreate_route_present else 'idcreate route will be added' }}"
+
+    # ── 4. Add idcreate route block to Caddyfile ────────────────────────────────
+    - name: Append idcreate route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddyfile_path }}"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK — idcreate.vrsctest"
+        block: |
+          {{ idcreate_domain }} {
+            reverse_proxy {{ idcreate_upstream }}
+            tls hermesreport@verus.trading
+            log {
+              output file /data/access.log
+            }
+          }
+        state: "{{ 'present' if not idcreate_route_present else 'absent' }}"
+      register: caddyfile_updated
+      when: not idcreate_route_present
+
+    - name: Confirm Caddyfile updated
+      ansible.builtin.debug:
+        msg: "Caddyfile updated — idcreate route added"
+      when: caddyfile_updated.changed | default(false)
+
+    # ── 5. Update Caddy docker-compose.yml to add net-vrsctest network ───────────
+    - name: Slurp current docker-compose.yml
+      ansible.builtin.slurp:
+        src: "{{ compose_file }}"
+      register: compose_b64
+
+    - name: Decode docker-compose.yml
+      ansible.builtin.set_fact:
+        compose_content: "{{ compose_b64.content | b64decode }}"
+
+    - name: Check if net-vrsctest already in compose
+      ansible.builtin.set_fact:
+        vrsctest_network_present: "{{ docker_network_vrsctest in compose_content }}"
+
+    - name: Display network status
+      ansible.builtin.debug:
+        msg: "{{ 'net-vrsctest already in Caddy compose' if vrsctest_network_present else 'net-vrsctest will be added to Caddy compose' }}"
+
+    - name: Rewrite docker-compose.yml with net-vrsctest added
+      ansible.builtin.copy:
+        content: |
+          # docker-compose.yml — Caddy reverse proxy (mains_blue)
+          # Extended to net-vrsctest for idcreate.vrsctest.buildwithdreams.com
+
+          services:
+            caddy:
+              image: caddy:2
+              container_name: {{ container_name }}
+              hostname: caddy
+              ports:
+                - "80:80"
+                - "443:443"
+              networks:
+                pbaas_network:
+                  ipv4_address: 10.201.0.10
+                vrsctest_network:
+                  ipv4_address: 10.200.0.10
+              volumes:
+                - /home/{{ ansible_user }}/caddy:/config/caddy:ro
+                - /home/{{ ansible_user }}/caddy/data:/data
+                - /home/{{ ansible_user }}/rvt/build:/srv/rvt/dist:ro
+              command: caddy run --config /config/caddy/Caddyfile --adapter caddyfile
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "caddy", "health"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+                start_period: 10s
+              logging:
+                driver: json-file
+                options:
+                  max-size: 10m
+                  max-file: "3"
+
+          networks:
+            pbaas_network:
+              name: net-vrsc-blue
+              external: true
+            vrsctest_network:
+              name: {{ docker_network_vrsctest }}
+              external: true
+        dest: "{{ compose_file }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: compose_updated
+      when: not vrsctest_network_present
+
+    - name: Confirm compose updated
+      ansible.builtin.debug:
+        msg: "Caddy compose updated — net-vrsctest network added"
+      when: compose_updated.changed | default(false)
+
+    # ── 6. Reload Caddy container ──────────────────────────────────────────────
+    - name: Recreate Caddy container with updated compose
+      ansible.builtin.shell:
+        cmd: "cd {{ caddy_path }} && docker compose -f {{ compose_file }} -p {{ compose_project }} up -d --force-recreate"
+      register: compose_reload
+      changed_when: true
+      when: compose_updated.changed | default(false) or not vrsctest_network_present
+
+    - name: Reload Caddy config (no compose change needed)
+      ansible.builtin.shell:
+        cmd: "docker exec {{ container_name }} caddy reload --config /config/caddy/Caddyfile --adapter caddyfile"
+      register: caddy_reload
+      changed_when: true
+      when: not (compose_updated.changed | default(false)) and not vrsctest_network_present
+
+    # ── 7. Verify Caddy reloaded ────────────────────────────────────────────────
+    - name: Verify Caddy container is running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || true"
+      register: caddy_running
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: caddy_running.stdout | length > 0
+      failed_when: false
+
+    # ── 8. Display summary ──────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          Caddy route for idcreate.vrsctest.buildwithdreams.com:
+            upstream   → {{ idcreate_upstream }}
+            TLS        → auto (Let's Encrypt)
+            Caddyfile  → {{ caddyfile_path }}
+            Container  → {{ container_name }}
+            {% if compose_updated.changed | default(false) %}
+            Networks   → net-vrsc-blue (existing) + net-vrsctest (added)
+            Container recreated to apply network change.
+            {% else %}
+            Networks   → net-vrsc-blue + net-vrsctest (already configured)
+            {% endif %}
+
+          Verify:
+            curl -I https://{{ idcreate_domain }}
+            docker exec {{ container_name }} caddy list-certificates
