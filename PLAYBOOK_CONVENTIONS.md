@@ -167,4 +167,4 @@ Known IDs (confirmed on BWD):
 | `39-idcreate-clone.yml` | Clone BuildWithDreams/svc-idcreate repo |
 | `40-idcreate-build.yml` | Build svc-idcreate Docker image |
 | `41-idcreate-deploy.yml` | Deploy idcreate stack (api + worker) on net-vrsctest (.14) |
-| `42-idcreate-caddy-route.yml` | Add idcreate.vrsctest Caddy route + extend Caddy to net-vrsctest |
+| `42-idcreate-caddy-route.yml` | Add idcreate.vrsctest.buildwithdreams.com route to Caddy |

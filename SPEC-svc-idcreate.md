@@ -32,10 +32,8 @@ Internet → Caddy (10.201.0.10:443) → idcreate.vrsctest.buildwithdreams.com
 
 - **Docker network:** `net-vrsctest` (`10.200.0.0/24`) — the same network as the VRSCTEST daemon
 - **Service IP:** `10.200.0.14` (.14 is next available after .11=verusd)
-- **Compose project:** `test_blue_idcreate` (follows `<network>_<color>` convention)
-- **API container:** `test_blue_idcreate-api-1` — FastAPI on port 5003
-- **Worker container:** `test_blue_idcreate-worker-1` — polling worker
-- **Caddy container:** Already on `net-vrsc-blue` — must be added to `net-vrsctest` to proxy the new route
+- **Compose project:** `dev200_idcreate` (follows `<network>_<color>` convention — VRSCTEST uses `dev200` from its env.sample)
+- **Compose project:** `dev200_idcreate`
 
 ---
 
@@ -125,36 +123,26 @@ verusd_vrsc_rpc_host="10.200.0.11"
 | Repo URL | `https://github.com/BuildWithDreams/svc-idcreate.git` | This spec |
 | Clone path | `/home/dream-hermes-agent/svc-idcreate` | This spec |
 | Docker network | `net-vrsctest` | Existing |
-| Service IP | `10.200.0.14` | Next available (.14) |
+| Service IP | `10.200.0.14` | Next available after .11=verusd, .13=qrcodes |
 | API port | `5003` (host: `127.0.0.1:5003`) | svc-idcreate default |
+| Provisioning port | `5055` (host-only) | svc-idcreate default |
 | Worker port | none (internal) | svc-idcreate default |
-| Compose project | `test_blue_idcreate` | Convention |
-| Container (API) | `test_blue_idcreate-api-1` | Auto-generated |
-| Container (Worker) | `test_blue_idcreate-worker-1` | Auto-generated |
+| Compose project | `dev200_idcreate` | VRSCTEST uses `dev200` prefix |
+| Container (API) | `dev200_idcreate-api-1` | Auto-generated |
+| Container (Worker) | `dev200_idcreate-worker-1` | Auto-generated |
+| Container (Provisioning) | `dev200_idcreate-provisioning-1` | Auto-generated |
 | Image | `buildwithdreams/svc-idcreate:local` | Built locally |
 | Domain | `idcreate.vrsctest.buildwithdreams.com` | This spec |
 | Upstream for Caddy | `10.200.0.14:5003` | This spec |
 | NATIVE_COIN | `VRSCTEST` | This spec |
 | HEALTH_RPC_DAEMON | `verusd_vrsc` | svc-idcreate default |
+| RPC host for VRSCTEST | `10.200.0.11:27486` | VRSCTEST daemon |
 
 ---
 
 ## 8. Caddy Network Extension
 
-Caddy currently runs on `net-vrsc-blue` only. Since `idcreate.vrsctest.buildwithdreams.com` resolves to the same server IP, Caddy must be reachable from `net-vrsctest` to proxy to `10.200.0.14`.
-
-**Solution:** Add `net-vrsctest` as a second network in Caddy's `docker-compose.yml`. The compose file is rewritten by playbook 42 to add the extra network. No Caddy image rebuild needed — networks are a runtime concern.
-
-New Caddy networks in compose:
-```yaml
-networks:
-  pbaas_network:  # existing net-vrsc-blue
-    name: net-vrsc-blue
-    external: true
-  vrsctest_network:  # new
-    name: net-vrsctest
-    external: true
-```
+Caddy is already on `net-vrsctest` (added by `37-qrcodes-caddy-network.yml` during the qrcodes deployment). No further network changes needed.
 
 ---
 
@@ -178,10 +166,8 @@ networks:
 
 ## 11. Open Questions
 
-- [ ] **SFConstants mapping:** Confirm whether `DAEMON_VERUSD_VRSC` + `NATIVE_COIN="VRSCTEST"` connects to VRSCTEST daemon or VRSC mainnet daemon. If VRSCTEST has a separate entry in `SFConstants`, update RPC env var names accordingly.
-- [ ] **DNS A record:** Confirm `idcreate.vrsctest.buildwithdreams.com` A record is set to `135.181.136.105`.
-- [ ] **RPC credentials:** Confirm VRSCTEST daemon RPC user (`dream`) and password match what's in `~/docker-verusd/vrsctest/.env`.
-- [ ] **Existing `rpcallowip`:** Confirm VRSCTEST daemon's `.conf` already includes `rpcallowip=10.200.0.0/24` (likely set by playbook 16b, but verify).
+- [ ] **SFConstants mapping:** Confirm whether `DAEMON_VERUSD_VRSC` + `NATIVE_COIN="VRSCTEST"` points to VRSCTEST daemon (`10.200.0.11:27486`). If the VRSCTEST chain uses a different daemon name slot in `SFConstants.py`, update the `.env` var names accordingly.
+- [ ] **Provisioning DNS name:** `PROVISIONING_SERVICE_URL` is set to `http://idcreate-provisioning:5055` (Docker DNS hostname). Confirm this matches what `HttpProvisioningAdapter` expects.
 
 ---
 

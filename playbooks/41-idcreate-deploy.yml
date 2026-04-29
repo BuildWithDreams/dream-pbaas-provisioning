@@ -1,68 +1,65 @@
 # Playbook: 41-idcreate-deploy.yml
-# Purpose: Create docker-compose.yml for the idcreate stack (api + worker) and deploy the container.
-#          Reads VRSCTEST RPC credentials from the remote vrsctest.conf.
+# Purpose: Deploy the svc-idcreate stack (provisioning + api + worker) on net-vrsctest at 10.200.0.14.
+#          Uses the Docker image built by 40-idcreate-build.yml.
 # Run with: ansible-playbook -i inventory.ini playbooks/41-idcreate-deploy.yml
-# Requires: 40-idcreate-build.yml (image must exist); VRSCTEST daemon must be running
+# Requires: 40-idcreate-build.yml (image must exist)
 # Idempotent: safe to re-run — stops old containers before starting fresh.
-
 ---
-- name: Deploy svc-idcreate
+- name: Deploy svc-idcreate for VRSCTEST
   hosts: production
   become: false
   vars:
     idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
-    vrsctest_path: "/home/{{ ansible_user }}/docker-verusd/vrsctest"
-    vrsctest_conf: "{{ vrsctest_path }}/data_dir/vrsctest.conf"
+    compose_project: "dev200_idcreate"
     docker_network: "net-vrsctest"
-    compose_project: "test_blue_idcreate"
     idcreate_bind_ip: "10.200.0.14"
     idcreate_api_port: "5003"
+    provisioning_port: "5055"
     image_name: "buildwithdreams/svc-idcreate"
+    image_tag: "local"
 
   tasks:
-    # ── 1. Verify image exists ─────────────────────────────────────────────────
+    # ── 1. Verify image exists ──────────────────────────────────────────────────
     - name: Verify image is built
       ansible.builtin.shell:
-        cmd: "docker image inspect {{ image_name }}:local > /dev/null 2>&1 && echo 'ok' || echo 'missing'"
+        cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'ok' || echo 'missing'"
       register: image_check
       changed_when: false
       failed_when: image_check.stdout != 'ok'
 
-    # ── 2. Read VRSCTEST RPC credentials from vrsctest.conf ────────────────────
+    # ── 2. Stop existing containers if running ───────────────────────────────────
+    - name: Remove old containers if they exist
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} down 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 3. Read VRSCTEST RPC credentials from vrsctest.conf ─────────────────────
     - name: Read vrsctest.conf
       ansible.builtin.slurp:
-        src: "{{ vrsctest_conf }}"
+        src: "/home/{{ ansible_user }}/docker-verusd/vrsctest/data_dir/vrsctest.conf"
       register: vrsctest_conf_b64
       failed_when: false
 
     - name: Fail if vrsctest.conf not found
       ansible.builtin.fail:
         msg: |
-          vrsctest.conf not found at {{ vrsctest_conf }}.
-          Start VRSCTEST first so the config is generated.
+          vrsctest.conf not found. Start VRSCTEST first so the config is generated.
       when: vrsctest_conf_b64.failed | default(false)
 
-    - name: Decode vrsctest.conf
+    - name: Extract rpcuser and rpcpassword from vrsctest.conf
       ansible.builtin.set_fact:
-        vrsctest_conf_content: "{{ vrsctest_conf_b64.content | b64decode }}"
-
-    - name: Extract rpcuser from vrsctest.conf
-      ansible.builtin.set_fact:
-        vrsctest_rpcuser: "{{ (vrsctest_conf_content.splitlines() | list | select('search', '^rpcuser=') | first | default('')).split('=', 1)[1] | trim }}"
-
-    - name: Extract rpcpassword from vrsctest.conf
-      ansible.builtin.set_fact:
-        vrsctest_rpcpassword: "{{ (vrsctest_conf_content.splitlines() | list | select('search', '^rpcpassword=') | first | default('')).split('=', 1)[1] | trim }}"
+        vrsctest_rpcuser: "{{ (vrsctest_conf_b64.content | b64decode | split('\n') | list | select('search', '^rpcuser=') | first | default('')).split('=', 1)[1] | trim }}"
+        vrsctest_rpcpassword: "{{ (vrsctest_conf_b64.content | b64decode | split('\n') | list | select('search', '^rpcpassword=') | first | default('')).split('=', 1)[1] | trim }}"
 
     - name: Validate RPC credentials extracted
       ansible.builtin.assert:
         that:
           - vrsctest_rpcuser | length > 0
           - vrsctest_rpcpassword | length > 0
-        fail_msg: "Could not extract rpcuser/rpcpassword from {{ vrsctest_conf }}"
-        success_msg: "RPC credentials extracted from vrsctest.conf"
+        fail_msg: "Could not extract rpcuser/rpcpassword from vrsctest.conf"
 
-    # ── 3. Copy env.sample to .env (idempotent) ───────────────────────────────
+    # ── 4. Copy env.sample to .env and populate RPC vars ───────────────────────
     - name: Check if .env already exists
       ansible.builtin.stat:
         path: "{{ idcreate_path }}/.env"
@@ -81,17 +78,15 @@
 
     - name: Display .env status
       ansible.builtin.debug:
-        msg: "{{ '.env created from env.sample' if env_copied.changed else '.env already exists — RPC vars will be updated in place' }}"
+        msg: "{{ '.env created from env.sample' if env_copied.changed | default(false) else '.env already present — RPC vars will be updated in place' }}"
 
-    # ── 4. Update .env with VRSCTEST RPC + service settings ──────────────────
-    # verusd_vrsc RPC — used for VRSCTEST chain via NATIVE_COIN override
+    # ── 5. Update .env with VRSCTEST RPC + service settings ─────────────────────
     - name: Set verusd_vrsc_rpc_enabled
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^verusd_vrsc_rpc_enabled\s*='
         line: 'verusd_vrsc_rpc_enabled="true"'
         state: present
-      register: vrsc_enabled_updated
 
     - name: Set verusd_vrsc_rpc_user
       ansible.builtin.lineinfile:
@@ -99,7 +94,6 @@
         regexp: '^verusd_vrsc_rpc_user\s*='
         line: 'verusd_vrsc_rpc_user="{{ vrsctest_rpcuser }}"'
         state: present
-      register: vrsc_user_updated
 
     - name: Set verusd_vrsc_rpc_password
       ansible.builtin.lineinfile:
@@ -107,7 +101,6 @@
         regexp: '^verusd_vrsc_rpc_password\s*='
         line: 'verusd_vrsc_rpc_password="{{ vrsctest_rpcpassword }}"'
         state: present
-      register: vrsc_pass_updated
 
     - name: Set verusd_vrsc_rpc_port
       ansible.builtin.lineinfile:
@@ -115,26 +108,21 @@
         regexp: '^verusd_vrsc_rpc_port\s*='
         line: 'verusd_vrsc_rpc_port="27486"'
         state: present
-      register: vrsc_port_updated
 
     - name: Set verusd_vrsc_rpc_host
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^verusd_vrsc_rpc_host\s*='
-        line: 'verusd_vrsc_rpc_host="{{ idcreate_bind_ip }}"'
+        line: 'verusd_vrsc_rpc_host="10.200.0.11"'
         state: present
-      register: vrsc_host_updated
 
-    # NATIVE_COIN — tells svc-idcreate to use VRSCTEST
     - name: Set NATIVE_COIN to VRSCTEST
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^NATIVE_COIN='
         line: 'NATIVE_COIN="VRSCTEST"'
         state: present
-      register: native_coin_updated
 
-    # Health RPC daemon (verusd_vrsc slot is what SFConstants calls it)
     - name: Set HEALTH_RPC_DAEMON
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
@@ -142,12 +130,11 @@
         line: 'HEALTH_RPC_DAEMON="verusd_vrsc"'
         state: present
 
-    # Provisioning adapter (local HTTP to svc-provisioning)
-    - name: Set PROVISIONING_SERVICE_URL
+    - name: Set PROVISIONING_SERVICE_URL (Docker DNS name)
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^PROVISIONING_SERVICE_URL='
-        line: 'PROVISIONING_SERVICE_URL="http://127.0.0.1:5055"'
+        line: 'PROVISIONING_SERVICE_URL="http://idcreate-provisioning:5055"'
         state: present
 
     - name: Set PROVISIONING_ADAPTER_MODE
@@ -157,8 +144,7 @@
         line: 'PROVISIONING_ADAPTER_MODE="http"'
         state: present
 
-    # ── 5. Show .env RPC section ───────────────────────────────────────────────
-    - name: Show updated RPC vars in .env
+    - name: Show updated .env RPC vars
       ansible.builtin.debug:
         msg: |
           .env RPC configuration:
@@ -166,20 +152,21 @@
             verusd_vrsc_rpc_user     = {{ vrsctest_rpcuser }}
             verusd_vrsc_rpc_password = <redacted>
             verusd_vrsc_rpc_port     = 27486
-            verusd_vrsc_rpc_host    = {{ idcreate_bind_ip }}
+            verusd_vrsc_rpc_host     = 10.200.0.11
             NATIVE_COIN              = VRSCTEST
             HEALTH_RPC_DAEMON        = verusd_vrsc
+            PROVISIONING_SERVICE_URL  = http://idcreate-provisioning:5055
 
-    # ── 6. Write docker-compose.yml ────────────────────────────────────────────
+    # ── 6. Write docker-compose.yml ───────────────────────────────────────────────
     - name: Create docker-compose.yml
       ansible.builtin.copy:
         content: |
-          # docker-compose.yml — svc-idcreate (test_blue)
-          # Built from: buildwithdreams/svc-idcreate
+          # docker-compose.yml — svc-idcreate (VRSCTEST / dev200)
+          # Built from: {{ image_name }}:{{ image_tag }}
           version: "3.9"
 
           services:
-            svc-provisioning:
+            provisioning:
               build:
                 context: .
                 args:
@@ -187,19 +174,20 @@
               container_name: {{ compose_project }}-provisioning-1
               hostname: idcreate-provisioning
               ports:
-                - "127.0.0.1:5055:5055"
+                - "127.0.0.1:{{ provisioning_port }}:{{ provisioning_port }}"
               environment:
-                - PORT=5055
+                - PORT={{ provisioning_port }}
                 - NODE_BIN=node
                 - PROVISIONING_SCRIPT_ROOT=/workspace/svc-idcreate/provisioning
               volumes:
                 - .:/workspace:ro
               restart: unless-stopped
               networks:
-                - pbaas_network
+                pbaas_network:
+                  ipv4_address: {{ idcreate_bind_ip }}
 
-            idcreate-api:
-              image: {{ image_name }}:local
+            api:
+              image: {{ image_name }}:{{ image_tag }}
               container_name: {{ compose_project }}-api-1
               hostname: idcreate-api
               ports:
@@ -214,10 +202,11 @@
               command: uv run fastapi run id_create_service.py --port {{ idcreate_api_port }} --host 0.0.0.0
               restart: unless-stopped
               networks:
-                - pbaas_network
+                pbaas_network:
+                  ipv4_address: {{ idcreate_bind_ip }}
 
-            idcreate-worker:
-              image: {{ image_name }}:local
+            worker:
+              image: {{ image_name }}:{{ image_tag }}
               container_name: {{ compose_project }}-worker-1
               hostname: idcreate-worker
               env_file:
@@ -228,10 +217,11 @@
                 - WORKER_POLL_INTERVAL_SECONDS=15
               volumes:
                 - idcreate_data:/data
-              command: /bin/sh -c "while true; do uv run python worker.py; sleep ${WORKER_POLL_INTERVAL_SECONDS:-15}; done"
+              command: /bin/sh -c "while true; do uv run python worker.py; sleep $${WORKER_POLL_INTERVAL_SECONDS:-15}; done"
               restart: unless-stopped
               networks:
-                - pbaas_network
+                pbaas_network:
+                  ipv4_address: {{ idcreate_bind_ip }}
 
           volumes:
             idcreate_data:
@@ -246,21 +236,14 @@
         mode: '0644'
       register: compose_written
 
-    - name: Display compose file status
+    - name: Display compose file path
       ansible.builtin.debug:
         msg: "docker-compose.yml written to {{ idcreate_path }}/docker-compose.yml"
 
-    # ── 7. Stop existing idcreate containers ──────────────────────────────────
-    - name: Stop and remove existing idcreate containers
+    # ── 4. Deploy with docker compose ───────────────────────────────────────────
+    - name: Start svc-idcreate containers
       ansible.builtin.shell:
-        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} down 2>/dev/null || true"
-      changed_when: true
-      failed_when: false
-
-    # ── 8. Deploy with docker compose ─────────────────────────────────────────
-    - name: Start idcreate containers
-      ansible.builtin.shell:
-        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} up -d --build"
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} up -d --force-recreate"
       register: compose_up
       changed_when: true
 
@@ -268,29 +251,29 @@
       ansible.builtin.debug:
         msg: "Containers started: {{ compose_up.stdout_lines | join(' ') }}"
 
-    # ── 9. Wait for api container to be running ────────────────────────────────
+    # ── 5. Wait for api container to be running ─────────────────────────────────────
     - name: Verify api container is running
       ansible.builtin.shell:
         cmd: "docker ps 2>&1 | grep '{{ compose_project }}-api-1' | head -1 || true"
       register: api_running
       changed_when: false
       retries: 10
-      delay: 5
+      delay: 3
       until: api_running.stdout | length > 0
       failed_when: false
 
-    # ── 10. Display deployment summary ─────────────────────────────────────────
+    # ── 6. Summary ───────────────────────────────────────────────────────────────
     - name: Display deployment summary
       ansible.builtin.debug:
         msg: |
-          svc-idcreate deployed:
+          svc-idcreate deployed (VRSCTEST):
             compose project → {{ compose_project }}
-            network         → {{ docker_network }}
-            API IP          → {{ idcreate_bind_ip }}:{{ idcreate_api_port }}
+            network        → {{ docker_network }}
+            API IP         → {{ idcreate_bind_ip }}:{{ idcreate_api_port }}
+            provisioning   → {{ idcreate_bind_ip }}:{{ provisioning_port }} (host-only)
             containers      → {{ compose_project }}-api-1, {{ compose_project }}-worker-1, {{ compose_project }}-provisioning-1
-            image           → {{ image_name }}:local
-            .env            → {{ idcreate_path }}/.env
+            image          → {{ image_name }}:{{ image_tag }}
 
-          Verify with:
+          Verify:
             ssh <host> "docker ps | grep {{ compose_project }}"
             curl http://{{ idcreate_bind_ip }}:{{ idcreate_api_port }}/health
