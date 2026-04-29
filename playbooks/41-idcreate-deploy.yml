@@ -186,7 +186,6 @@
               restart: unless-stopped
               networks:
                 pbaas_network:
-                  ipv4_address: {{ idcreate_bind_ip }}
 
           volumes:
             idcreate_data:
