@@ -87,7 +87,7 @@
     - name: Abort if Caddyfile invalid
       ansible.builtin.fail:
         msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
-      when: caddy_validate.rc != 0
+      when: caddy_copy.changed and caddy_validate.rc != 0
 
     # ── 6. Reload Caddy (only when route was added) ─────────────────────────────
     - name: Reload Caddy to apply new route
@@ -100,6 +100,7 @@
     - name: Display reload result
       ansible.builtin.debug:
         msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
+      when: caddy_copy.changed
 
     # ── 7. Health check: verify upstream is reachable from Caddy ────────────────
     - name: Health check — upstream idcreate API
