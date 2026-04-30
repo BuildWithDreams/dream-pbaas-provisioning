@@ -1,0 +1,105 @@
+# Playbook: 25-listunspent.yml
+# Purpose: Retrieve unspent transaction outputs (UTXOs) from wallet via the verus CLI.
+#          Calls listunspent on VRSC and vDEX containers — same pattern as getinfo in 15-sync-status.yml.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbooks/25-listunspent.yml
+#
+# Optional overrides:
+#   ansible-playbook -i inventory.ini playbooks/25-listunspent.yml -e "listunspent_minconf=0" -e "listunspent_maxconf=6"
+
+---
+- name: Get wallet UTXOs via listunspent
+  hosts: production
+  gather_facts: false
+  vars:
+    ansible_user: dream-hermes-agent
+    listunspent_minconf: "1"
+    listunspent_maxconf: "9999999"
+
+  tasks:
+    # ── VRSC ───────────────────────────────────────────────────────────────────
+    - name: Query VRSC listunspent
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vrsc-1 verus listunspent {{ listunspent_minconf }} {{ listunspent_maxconf }} 2>&1"
+      register: vrsc_listunspent
+      changed_when: false
+      failed_when: false
+
+    # ── vDEX ────────────────────────────────────────────────────────────────────
+    - name: Query vDEX listunspent
+      ansible.builtin.shell:
+        cmd: "docker exec mains_blue-vdex-1 verus -chain=vdex listunspent {{ listunspent_minconf }} {{ listunspent_maxconf }} 2>&1"
+      register: vdex_listunspent
+      changed_when: false
+      failed_when: false
+
+    # ── Parse VRSC ──────────────────────────────────────────────────────────────
+    - name: Set VRSC offline defaults
+      ansible.builtin.set_fact:
+        vrsc_utxos: []
+        vrsc_utxo_count: 0
+        vrsc_utxo_total: "0"
+        vrsc_online: false
+      when: not (vrsc_listunspent.stdout is search('['))
+
+    - name: Parse VRSC utxos
+      ansible.builtin.set_fact:
+        vrsc_utxos: "{{ vrsc_listunspent.stdout | from_json }}"
+        vrsc_utxo_count: "{{ (vrsc_listunspent.stdout | from_json) | length }}"
+        vrsc_utxo_total: "{{ '%.8f' | format((vrsc_listunspent.stdout | from_json) | sum(attribute='amount') | float) }}"
+        vrsc_online: true
+      when: vrsc_listunspent.stdout is search('[')
+
+    # ── Parse vDEX ──────────────────────────────────────────────────────────────
+    - name: Set vDEX offline defaults
+      ansible.builtin.set_fact:
+        vdex_utxos: []
+        vdex_utxo_count: 0
+        vdex_utxo_total: "0"
+        vdex_online: false
+      when: not (vdex_listunspent.stdout is search('['))
+
+    - name: Parse vDEX utxos
+      ansible.builtin.set_fact:
+        vdex_utxos: "{{ vdex_listunspent.stdout | from_json }}"
+        vdex_utxo_count: "{{ (vdex_listunspent.stdout | from_json) | length }}"
+        vdex_utxo_total: "{{ '%.8f' | format((vdex_listunspent.stdout | from_json) | sum(attribute='amount') | float) }}"
+        vdex_online: true
+      when: vdex_listunspent.stdout is search('[')
+
+    # ── Summary ─────────────────────────────────────────────────────────────────
+    - name: Display UTXO summary
+      ansible.builtin.debug:
+        msg: |
+          {% if vrsc_online %}
+          VRSC  — {{ vrsc_utxo_count }} UTXO(s)  ·  total {{ vrsc_utxo_total }} VRSC
+          {% else %}
+          VRSC  — offline or no wallet
+          Last output: {{ vrsc_listunspent.stderr | default(vrsc_listunspent.stdout) }}
+          {% endif %}
+          {% if vdex_online %}
+          vDEX  — {{ vdex_utxo_count }} UTXO(s)  ·  total {{ vdex_utxo_total }} vDEX
+          {% else %}
+          vDEX  — offline or no wallet
+          Last output: {{ vdex_listunspent.stderr | default(vdex_listunspent.stdout) }}
+          {% endif %}
+
+    # ── Assertions ──────────────────────────────────────────────────────────────
+    - name: Assert VRSC returned valid JSON
+      ansible.builtin.assert:
+        that:
+          - "vrsc_listunspent.rc == 0"
+          - "vrsc_listunspent.stdout is search('[')"
+        fail_msg: "VRSC listunspent failed — {{ vrsc_listunspent.stderr | default(vrsc_listunspent.stdout) }}"
+        success_msg: "VRSC listunspent returned valid JSON"
+      when: vrsc_online
+
+    - name: Assert vDEX returned valid JSON
+      ansible.builtin.assert:
+        that:
+          - "vdex_listunspent.rc == 0"
+          - "vdex_listunspent.stdout is search('[')"
+        fail_msg: "vDEX listunspent failed — {{ vdex_listunspent.stderr | default(vdex_listunspent.stdout) }}"
+        success_msg: "vDEX listunspent returned valid JSON"
+      when: vdex_online
