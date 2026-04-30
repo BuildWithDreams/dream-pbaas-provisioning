@@ -7,7 +7,7 @@
 ---
 - name: Clone svc-idcreate repository
   hosts: production
-  become: false
+  become_user: "{{ ansible_user }}"
   vars:
     idcreate_repo_url: "https://github.com/BuildWithDreams/svc-idcreate.git"
     idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
