@@ -35,7 +35,7 @@
     - name: Set SOURCE_OF_FUNDS in .env
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
-        regexp: '^SOURCE_OF_FUNDS='
+        regexp: '^SOURCE_OF_FUNDS=.*'
         line: 'SOURCE_OF_FUNDS="{{ source_of_funds_address }}"'
         state: present
       register: sof_written
