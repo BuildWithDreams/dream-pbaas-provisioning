@@ -38,6 +38,7 @@
         regexp: '^SOURCE_OF_FUNDS=.*'
         line: 'SOURCE_OF_FUNDS="{{ source_of_funds_address }}"'
         state: present
+        backrefs: false
       register: sof_written
 
     - name: Confirm value written
