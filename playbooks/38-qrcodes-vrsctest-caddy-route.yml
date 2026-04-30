@@ -20,7 +20,7 @@
     # ── 0. Pre-flight: verify Caddy is on net-vrsctest ──────────────────────────
     - name: Verify Caddy is connected to net-vrsctest (pre-flight)
       ansible.builtin.shell:
-        cmd: "docker network inspect {{ docker_network }} --format '{{range .Containers}}{{.Name}} {{end}}' | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'missing'"
+        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'missing'"
       register: caddy_network_preflight
       changed_when: false
       failed_when: caddy_network_preflight.stdout != 'ok'
