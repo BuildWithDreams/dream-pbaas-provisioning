@@ -26,11 +26,7 @@
     # ── 2. Check if already connected ─────────────────────────────────────────────
     - name: Check if already connected to net-vrsctest
       ansible.builtin.shell:
-        cmd: >
-          docker network inspect net-vrsctest --format '{{ '{{' }}range .Containers{{ '}}' }}{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}end{{ '}}' }}'
-          | grep -w '{{ caddy_container }}'
-          && echo 'connected'
-          || echo 'not_connected'
+        cmd: "docker network inspect net-vrsctest --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'connected' || echo 'not_connected'"
       register: net_check
       changed_when: false
       failed_when: false
@@ -42,24 +38,26 @@
     # ── 3. Connect to net-vrsctest ───────────────────────────────────────────────
     - name: Connect Caddy to net-vrsctest
       ansible.builtin.shell:
-        cmd: "docker network connect net-vrsctest {{ caddy_container }}"
+        cmd: "docker network connect net-vrsctest {{ caddy_container }} 2>&1"
       register: connect_result
       changed_when: true
+      failed_when: false
+      when: net_check.stdout != 'connected'
+
+    - name: Detect if already connected (safe to ignore)
+      ansible.builtin.set_fact:
+        connect_ignored: "{{ 'already exists' in connect_result.stderr }}"
       when: net_check.stdout != 'connected'
 
     - name: Display connect result
       ansible.builtin.debug:
-        msg: "Caddy connected to net-vrsctest: {{ connect_result.stdout if connect_result.stdout else 'connected' }}"
+        msg: "Caddy {{ 'already on net-vrsctest (previous run)' if connect_ignored | default(false) else 'connected to net-vrsctest' }}"
       when: net_check.stdout != 'connected'
 
     # ── 4. Verify connection ──────────────────────────────────────────────────────
     - name: Verify Caddy is now on net-vrsctest
       ansible.builtin.shell:
-        cmd: >
-          docker network inspect net-vrsctest --format '{{range .Containers}}{{.Name}} {{end}}'
-          | grep -qw 'mains_blue_caddy-caddy-1'
-          && echo 'verified'
-          || echo 'failed'
+        cmd: "docker network inspect net-vrsctest --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'verified' || echo 'failed'"
       register: verify_check
       changed_when: false
       failed_when: false
