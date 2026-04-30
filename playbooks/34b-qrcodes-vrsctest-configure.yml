@@ -68,14 +68,49 @@
         mode: '0600'
       register: config_written
 
+    # ── 4b. Write Dockerfile ──────────────────────────────────────────────────
+    - name: Write Dockerfile
+      ansible.builtin.copy:
+        content: |
+          # Stage 1: Build TypeScript
+          FROM node:20-alpine AS builder
+          WORKDIR /build
+          COPY package.json yarn.lock .yarnrc.yml ./
+          COPY .yarn .yarn/
+          COPY .yarnrc.yml ./
+          # Install deps (fetches git+https deps)
+          RUN yarn install --immutable || yarn install
+          COPY . .
+          RUN yarn build
+
+          # Stage 2: Minimal runtime
+          FROM node:20-alpine
+          WORKDIR /app
+          # Install curl for healthcheck
+          RUN apk add --no-cache curl
+          COPY --from=builder /build/dist ./dist
+          COPY --from=builder /build/config.js ./
+          COPY --from=builder /build/package.json ./
+          EXPOSE 3000
+          HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+            CMD curl -f http://localhost:3000/ || exit 1
+          CMD ["node", "dist/server.js"]
+        dest: "{{ qr_path }}/Dockerfile"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: dockerfile_written
+
     # ── 5. Summary ──────────────────────────────────────────────────────────────
     - name: Display configuration summary
       ansible.builtin.debug:
         msg: |
-          config.js written to {{ qr_path }}/config.js
-          RPC_HOST  → 10.200.0.11
-          RPC_PORT  → 18843
-          RPC_USER  → {{ vrsctest_rpcuser }}
-          RPC_PASSWORD → <redacted>
+          qrcodes configured for VRSCTEST:
+            config.js  → {{ qr_path }}/config.js
+            Dockerfile → {{ qr_path }}/Dockerfile
+            RPC_HOST  → 10.200.0.11
+            RPC_PORT  → 18843
+            RPC_USER  → {{ vrsctest_rpcuser }}
+            RPC_PASSWORD → <redacted>
 
-          Next: run 35-qrcodes-vrsctest-build.yml to build the image (uses image_tag=vrsctest)
+          Next: run 35-qrcodes-vrsctest-build.yml to build the image
