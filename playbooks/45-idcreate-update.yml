@@ -47,23 +47,19 @@
       ansible.builtin.debug:
         msg: "{{ 'Updated to latest commit' if git_pull_result.changed else 'Already up-to-date — no changes pulled' }}"
 
-    # ── 4. Restore .env if it was lost (git checkout can remove it) ───────────
-    - name: Check if .env still exists after pull
-      ansible.builtin.stat:
-        path: "{{ idcreate_path }}/.env"
-      register: env_after_pull
-
-    - name: Restore .env from backup if missing after pull
+    # ── 4. Always restore .env after pull ────────────────────────────────────
+    #    Git merge can remove or replace untracked .env depending on merge
+    #    strategy. Restoring unconditionally is safer than checking existence.
+    - name: Restore .env from backup after pull
       ansible.builtin.shell:
         cmd: "cp {{ idcreate_path }}/.env.backup {{ idcreate_path }}/.env && echo 'restored'"
       register: env_restored
       changed_when: true
       failed_when: false
-      when: not env_after_pull.stat.exists
 
     - name: Log .env restore
       ansible.builtin.debug:
-        msg: ".env was overwritten by git — restored from .env.backup"
+        msg: ".env restored from .env.backup (git merge may have removed or replaced it)"
       when: env_restored.changed | default(false)
 
     # ── 5. Stop running containers ───────────────────────────────────────────
