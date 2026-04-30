@@ -4,5 +4,9 @@ inventory-local.ini
 .env
 *.local.*
 secrets/
-repos/docker-verusd
 __pycache__/
+
+# Repos cloned locally
+repos/docker-verusd
+repos/operations
+repos/verus-identity-update-qr-creator-main

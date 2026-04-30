@@ -1,0 +1,243 @@
+# Playbook: 34-fix-vrsctest-volume.yml
+# Purpose: Fix the vRSCTEST docker-compose volume mount so data persists to host.
+#          The actual data dir is /root/.komodo/vrsctest/ inside the container,
+#          but the compose mounts ./data_dir to /root/.komodo/VRSCTEST (wrong path).
+#          All data (wallet, chainstate, config) lives in the container's writable
+#          layer and is NOT persisted. This playbook rescues that data and fixes
+#          the mount.
+#
+# ⚠️  This playbook STOPs the vrsctest container. Expect downtime for vRSCTEST.
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/34-fix-vrsctest-volume.yml
+
+---
+- name: Fix vRSCTEST volume mount and persist data
+  hosts: production
+  become: false
+  vars:
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    vrsctest_path: "/home/{{ ansible_user }}/docker-verusd/vrsctest"
+    data_dir: "{{ vrsctest_path }}/data_dir"
+
+  tasks:
+    # 1. Verify container is running
+    - name: Check vrsctest container status
+      ansible.builtin.shell:
+        cmd: "docker ps --filter name=dev200-vrsctest --format '{% raw %}{{.Names}}{% endraw %}' | grep -q dev200-vrsctest && echo running || echo missing"
+      register: container_status
+      changed_when: false
+
+    - name: Fail if container not running
+      ansible.builtin.fail:
+        msg: "vrsctest container not running. Start it first."
+      when: container_status.stdout != "running"
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "Container dev200-vrsctest-1 is running — proceeding"
+
+    # 2. Read current config from INSIDE the container (where it actually lives)
+    - name: Read vrsctest.conf from running container
+      ansible.builtin.shell:
+        cmd: "docker exec dev200-vrsctest-1 cat /root/.komodo/vrsctest/vrsctest.conf"
+      register: live_conf
+      changed_when: false
+
+    - name: Display live config preview
+      ansible.builtin.debug:
+        msg: "Live config has {{ live_conf.stdout_lines | length }} lines"
+
+    # 3. Stop the container gracefully
+    - name: Stop vrsctest container
+      ansible.builtin.shell:
+        cmd: "cd {{ vrsctest_path }} && docker compose stop"
+      register: compose_stop
+      changed_when: true
+
+    - name: Confirm container stopped
+      ansible.builtin.debug:
+        msg: "Container stopped"
+
+    # 4. Copy all data from container's actual data dir to host data_dir
+    - name: Create data_dir/vrsctest directory on host
+      ansible.builtin.file:
+        path: "{{ data_dir }}/vrsctest"
+        state: directory
+        mode: '0755'
+
+    - name: Copy vrsctest.conf to host
+      ansible.builtin.shell:
+        cmd: "docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/vrsctest.conf {{ data_dir }}/vrsctest/vrsctest.conf"
+      changed_when: true
+
+    - name: Copy wallet.dat to host
+      ansible.builtin.shell:
+        cmd: "docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/wallet.dat {{ data_dir }}/vrsctest/wallet.dat"
+      changed_when: true
+
+    - name: Copy blocks/ to host
+      ansible.builtin.shell:
+        cmd: "docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/blocks {{ data_dir }}/vrsctest/blocks"
+      changed_when: true
+
+    - name: Copy chainstate/ to host
+      ansible.builtin.shell:
+        cmd: "docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/chainstate {{ data_dir }}/vrsctest/chainstate"
+      changed_when: true
+
+    - name: Copy database/ to host
+      ansible.builtin.shell:
+        cmd: "docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/database {{ data_dir }}/vrsctest/database"
+      changed_when: true
+
+    - name: Copy debug.log, peers.dat, fee_estimates, certs
+      ansible.builtin.shell:
+        cmd: |
+          docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/debug.log {{ data_dir }}/vrsctest/debug.log
+          docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/peers.dat {{ data_dir }}/vrsctest/peers.dat
+          docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/fee_estimates.dat {{ data_dir }}/vrsctest/fee_estimates.dat
+          docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/cert.pem {{ data_dir }}/vrsctest/cert.pem
+          docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/key.pem {{ data_dir }}/vrsctest/key.pem
+          docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/db.log {{ data_dir }}/vrsctest/db.log
+          docker cp dev200-vrsctest-1:/root/.komodo/vrsctest/verusd.pid {{ data_dir }}/vrsctest/verusd.pid
+      changed_when: true
+
+    - name: Verify copied data
+      ansible.builtin.shell:
+        cmd: "ls -la {{ data_dir }}/vrsctest/"
+      register: copied_check
+      changed_when: false
+
+    - name: Display copied files
+      ansible.builtin.debug:
+        msg: "Copied files:\n{{ copied_check.stdout }}"
+
+    # 5. Fix docker-compose.yml — change mount from /root/.komodo/VRSCTEST to /root/.komodo/vrsctest
+    - name: Verify current compose mount
+      ansible.builtin.debug:
+        msg: "Current compose has: ./data_dir:/root/.komodo/VRSCTEST → will fix to: ./data_dir:/root/.komodo/vrsctest"
+
+    - name: Fix volume mount path in docker-compose.yml
+      ansible.builtin.lineinfile:
+        path: "{{ vrsctest_path }}/docker-compose.yml"
+        regexp: '^\s+- \./data_dir:/root/.komodo/VRSCTEST'
+        line: '      - ./data_dir:/root/.komodo/vrsctest'
+      register: mount_fixed
+
+    - name: Confirm compose fix
+      ansible.builtin.debug:
+        msg: "{{ '✅ Volume mount fixed in docker-compose.yml' if mount_fixed.changed else 'ℹ️  Volume mount already correct' }}"
+
+    # 6. Add rpcallowip for Docker network subnet (10.200.0.0/24)
+    - name: Inspect net-vrsctest subnet
+      ansible.builtin.shell:
+        cmd: "docker network inspect net-vrsctest | python3 -c \"import json,sys; d=json.load(sys.stdin); print(d[0]['IPAM']['Config'][0]['Subnet'])\""
+      register: vrsctest_subnet
+      changed_when: false
+
+    - name: Derive rpcallowip line
+      ansible.builtin.set_fact:
+        subnet: "{{ vrsctest_subnet.stdout }}"
+        subnet_no_cidr: "{{ vrsctest_subnet.stdout | regex_replace('/\\d+$', '') }}"
+        cidr_suffix: "{{ vrsctest_subnet.stdout | regex_replace('.*/', '') }}"
+        rpcallowip_line: "rpcallowip={{ vrsctest_subnet.stdout | regex_replace('/\\d+$', '') }}/{{ cidr_suffix }}"
+
+    - name: Display subnet info
+      ansible.builtin.debug:
+        msg: "net-vrsctest subnet: {{ subnet }} → will add: {{ rpcallowip_line }}"
+
+    - name: Add rpcallowip for Docker network
+      ansible.builtin.lineinfile:
+        path: "{{ data_dir }}/vrsctest/vrsctest.conf"
+        line: "{{ rpcallowip_line }}"
+        regexp: "^rpcallowip={{ subnet_no_cidr }}/"
+        state: present
+      register: rpc_allow_added
+
+    - name: Confirm rpcallowip
+      ansible.builtin.debug:
+        msg: "{{ '✅ Added rpcallowip to vrsctest.conf' if rpc_allow_added.changed else 'ℹ️  rpcallowip already present' }}"
+
+    # 7. Read final config to confirm
+    - name: Show final rpcallowip entries
+      ansible.builtin.shell:
+        cmd: "grep rpcallowip {{ data_dir }}/vrsctest/vrsctest.conf"
+      register: final_rpc
+      changed_when: false
+
+    - name: Display final rpcallowip
+      ansible.builtin.debug:
+        msg: "Final rpcallowip entries:\n{{ final_rpc.stdout }}"
+
+    # 8. Fix ownership of persisted data
+    - name: Fix ownership of data_dir
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        recurse: true
+      become: true
+
+    # 9. Commit the compose fix to git
+    - name: Check git status
+      ansible.builtin.shell:
+        cmd: "git -C {{ docker_verusd_path }} status --short"
+      register: git_status
+      changed_when: false
+
+    - name: Display git status
+      ansible.builtin.debug:
+        msg: "Git status:\n{{ git_status.stdout_lines | join('\n') }}"
+
+    - name: Commit compose fix
+      ansible.builtin.shell:
+        cmd: "git -C {{ docker_verusd_path }} add docker-compose.yml && git -C {{ docker_verusd_path }} commit -m 'fix(vrsctest): correct volume mount path to /root/.komodo/vrsctest
+
+The daemon stores data at /root/.komodo/vrsctest/ not /root/.komodo/VRSCTEST.
+This resolves the volume mount so data persists to the host data_dir.'"
+      register: git_commit
+      changed_when: true
+
+    - name: Display commit result
+      ansible.builtin.debug:
+        msg: "Committed: {{ git_commit.stdout }}\n{{ git_commit.stderr }}"
+
+    # 10. Push to GitHub
+    - name: Push to GitHub
+      ansible.builtin.shell:
+        cmd: "git -C {{ docker_verusd_path }} push origin main"
+      register: git_push
+      changed_when: true
+
+    - name: Display push result
+      ansible.builtin.debug:
+        msg: "Pushed: {{ git_push.stdout }}\n{{ git_push.stderr }}"
+
+    # 11. Pull on BWD
+    - name: Pull fixed compose on BWD
+      ansible.builtin.shell:
+        cmd: "cd {{ vrsctest_path }} && git pull origin main"
+      register: git_pull
+      changed_when: true
+
+    - name: Confirm pull
+      ansible.builtin.debug:
+        msg: "Pulled on BWD:\n{{ git_pull.stdout }}\n{{ git_pull.stderr }}"
+
+    # 12. Restart container with corrected mount
+    - name: Start vrsctest container
+      ansible.builtin.shell:
+        cmd: "cd {{ vrsctest_path }} && docker compose up -d"
+      register: compose_up
+      changed_when: true
+
+    - name: Verify container restarted
+      ansible.builtin.shell:
+        cmd: "docker ps --filter name=dev200-vrsctest --format '{% raw %}{{.Names}}\t{{.Status}}{% endraw %}'"
+      register: container_final
+      changed_when: false
+
+    - name: Display final status
+      ansible.builtin.debug:
+        msg: "Container status:\n{{ container_final.stdout }}\n\n✅ Volume mount fixed. Data will now persist to {{ data_dir }}/vrsctest/\n✅ rpcallowip={{ subnet_no_cidr }}/{{ cidr_suffix }} added to vrsctest.conf"
