@@ -1,0 +1,86 @@
+# Playbook: 46-idcreate-allowed-parents.yml
+# Purpose: Set REGISTRAR_ALLOWED_PARENTS in svc-idcreate .env and force-restart the stack.
+# Run with: ansible-playbook -i inventory.ini playbooks/46-idcreate-allowed-parents.yml
+#           -e "currency_ids=VRSC,RVSR"
+---
+- name: Set REGISTRAR_ALLOWED_PARENTS for svc-idcreate
+  hosts: production
+  become: false
+  vars:
+    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
+    compose_project: "dev200_idcreate"
+
+  tasks:
+    # ── 1. Validate input ──────────────────────────────────────────────────────
+    - name: Require currency_ids
+      ansible.builtin.assert:
+        that:
+          - currency_ids | length > 0
+        fail_msg: "currency_ids is required. Run with: -e 'currency_ids=VRSC,RVSR'"
+
+    # ── 2. Verify .env exists ─────────────────────────────────────────────────
+    - name: Check if .env exists
+      ansible.builtin.stat:
+        path: "{{ idcreate_path }}/.env"
+      register: env_file_stat
+
+    - name: Fail if .env not found
+      ansible.builtin.fail:
+        msg: |
+          .env not found at {{ idcreate_path }}/.env.
+          Run playbook 41-idcreate-deploy.yml first to create it.
+      when: not env_file_stat.stat.exists
+
+    # ── 3. Write REGISTRAR_ALLOWED_PARENTS to .env ────────────────────────────
+    - name: Set REGISTRAR_ALLOWED_PARENTS in .env
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^REGISTRAR_ALLOWED_PARENTS=.*'
+        line: 'REGISTRAR_ALLOWED_PARENTS="{{ currency_ids }}"'
+        state: present
+      register: allowed_parents_written
+
+    - name: Confirm value written
+      ansible.builtin.debug:
+        msg: |
+          REGISTRAR_ALLOWED_PARENTS written to {{ idcreate_path }}/.env
+          Value: {{ currency_ids }}
+
+    # ── 4. Force-recreate containers to pick up new .env ─────────────────────
+    - name: Force-recreate idcreate containers
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} up -d --force-recreate"
+      changed_when: true
+      register: compose_recreate
+
+    # ── 5. Verify containers are Up ──────────────────────────────────────────
+    - name: Wait for api container to be running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ compose_project }}-api-1' | head -1 || true"
+      register: api_check
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: api_check.stdout | length > 0
+      failed_when: false
+
+    - name: Wait for worker container to be running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ compose_project }}-worker-1' | head -1 || true"
+      register: worker_check
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: worker_check.stdout | length > 0
+      failed_when: false
+
+    # ── 6. Summary ────────────────────────────────────────────────────────────
+    - name: Display result
+      ansible.builtin.debug:
+        msg: |
+          REGISTRAR_ALLOWED_PARENTS updated and containers restarted:
+            .env path               → {{ idcreate_path }}/.env
+            REGISTRAR_ALLOWED_PARENTS → {{ currency_ids }}
+            compose project         → {{ compose_project }}
+            api container           → {{ compose_project }}-api-1
+            worker container        → {{ compose_project }}-worker-1
