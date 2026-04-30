@@ -1,0 +1,66 @@
+# Playbook: 25b-listunspent-vrsctest.yml
+# Purpose: Retrieve unspent transaction outputs (UTXOs) from the VRSCTEST wallet.
+#          Calls listunspent via the verus CLI inside the container — same pattern
+#          as 15b-sync-status-vrsctest.yml.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbooks/25b-listunspent-vrsctest.yml
+#
+# Optional overrides:
+#   ansible-playbook -i inventory.ini playbooks/25b-listunspent-vrsctest.yml -e "listunspent_minconf=0" -e "listunspent_maxconf=6"
+
+---
+- name: Get VRSCTEST wallet UTXOs via listunspent
+  hosts: production
+  gather_facts: false
+  vars:
+    ansible_user: dream-hermes-agent
+    listunspent_minconf: "1"
+    listunspent_maxconf: "9999999"
+
+  tasks:
+    - name: Query VRSCTEST listunspent
+      ansible.builtin.shell:
+        cmd: "docker exec dev200-vrsctest-1 verus -chain=VRSCTEST listunspent {{ listunspent_minconf }} {{ listunspent_maxconf }} 2>&1"
+      register: vrsctest_listunspent
+      changed_when: false
+      failed_when: false
+
+    # ── Offline default ─────────────────────────────────────────────────────────
+    - name: Set offline defaults
+      ansible.builtin.set_fact:
+        vrsctest_utxos: []
+        vrsctest_utxo_count: 0
+        vrsctest_utxo_total: "0"
+        vrsctest_online: false
+      when: "'\"confirmations\"' not in vrsctest_listunspent.stdout"
+
+    # ── Parse ───────────────────────────────────────────────────────────────────
+    - name: Parse VRSCTEST utxos
+      ansible.builtin.set_fact:
+        vrsctest_utxos: "{{ vrsctest_listunspent.stdout | from_json }}"
+        vrsctest_utxo_count: "{{ (vrsctest_listunspent.stdout | from_json) | length }}"
+        vrsctest_utxo_total: "{{ '%.8f' | format((vrsctest_listunspent.stdout | from_json) | sum(attribute='amount') | float) }}"
+        vrsctest_online: true
+      when: "'\"confirmations\"' in vrsctest_listunspent.stdout"
+
+    # ── Summary ─────────────────────────────────────────────────────────────────
+    - name: Display UTXO summary
+      ansible.builtin.debug:
+        msg: |
+          {% if vrsctest_online %}
+          VRSCTEST — {{ vrsctest_utxo_count }} UTXO(s)  ·  total {{ vrsctest_utxo_total }} VRSCTEST
+          {% else %}
+          VRSCTEST — offline or no wallet
+          Last output: {{ vrsctest_listunspent.stderr | default(vrsctest_listunspent.stdout) }}
+          {% endif %}
+
+    # ── Assertion ───────────────────────────────────────────────────────────────
+    - name: Assert VRSCTEST returned valid JSON
+      ansible.builtin.assert:
+        that:
+          - "vrsctest_listunspent.rc == 0"
+          - "'\"confirmations\"' in vrsctest_listunspent.stdout"
+        fail_msg: "VRSCTEST listunspent failed — {{ vrsctest_listunspent.stderr | default(vrsctest_listunspent.stdout) }}"
+        success_msg: "VRSCTEST listunspent returned valid JSON"
+      when: vrsctest_online
