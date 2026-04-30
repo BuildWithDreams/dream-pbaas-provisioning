@@ -93,8 +93,9 @@
           COPY --from=builder /build/dist ./dist
           COPY --from=builder /build/config.js ./
           COPY --from=builder /build/package.json ./
-          # Copy node_modules (already built and dependency-fetched in builder stage)
           COPY --from=builder /build/node_modules ./node_modules
+          COPY --from=builder /build/views ./views
+          COPY --from=builder /build/public ./public
           EXPOSE 3000
           HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
             CMD curl -f http://localhost:3000/ || exit 1
