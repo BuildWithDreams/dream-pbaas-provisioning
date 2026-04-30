@@ -1,0 +1,123 @@
+# Playbook: 45-idcreate-update.yml
+# Purpose: Update svc-idcreate to latest GitHub commits, rebuild Docker image,
+#          and restart the stack on net-vrsctest.
+# Run with: ansible-playbook -i inventory.ini playbooks/45-idcreate-update.yml
+# Idempotent: safe to re-run. Image is always rebuilt. .env is preserved.
+---
+- name: Update svc-idcreate (pull + rebuild + restart)
+  hosts: production
+  become: false
+  vars:
+    idcreate_repo_url: "https://github.com/BuildWithDreams/svc-idcreate.git"
+    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
+    compose_project: "dev200_idcreate"
+    image_name: "buildwithdreams/svc-idcreate"
+    image_tag: "local"
+
+  tasks:
+    # ── 1. Verify idcreate directory exists ───────────────────────────────────
+    - name: Verify idcreate directory exists
+      ansible.builtin.stat:
+        path: "{{ idcreate_path }}"
+      register: idcreate_dir_stat
+      failed_when: not idcreate_dir_stat.stat.exists
+
+    # ── 2. Backup .env before any operation ──────────────────────────────────
+    - name: Backup existing .env
+      ansible.builtin.shell:
+        cmd: "cp {{ idcreate_path }}/.env {{ idcreate_path }}/.env.backup 2>/dev/null && echo 'backed up' || echo 'no .env to backup'"
+      register: env_backup
+      changed_when: true
+      failed_when: false
+
+    - name: Display backup status
+      ansible.builtin.debug:
+        msg: "{{ '.env.backup created' if 'backed up' in env_backup.stdout else 'No .env found to backup' }}"
+
+    # ── 3. Pull latest from GitHub ────────────────────────────────────────────
+    - name: Pull latest svc-idcreate commits from GitHub
+      ansible.builtin.git:
+        repo: "{{ idcreate_repo_url }}"
+        dest: "{{ idcreate_path }}"
+        update: true
+        accept_hostkey: true
+      register: git_pull_result
+
+    - name: Display pull status
+      ansible.builtin.debug:
+        msg: "{{ 'Updated to latest commit' if git_pull_result.changed else 'Already up-to-date — no changes pulled' }}"
+
+    # ── 4. Restore .env if it was lost (git checkout can remove it) ───────────
+    - name: Check if .env still exists after pull
+      ansible.builtin.stat:
+        path: "{{ idcreate_path }}/.env"
+      register: env_after_pull
+
+    - name: Restore .env from backup if missing after pull
+      ansible.builtin.shell:
+        cmd: "cp {{ idcreate_path }}/.env.backup {{ idcreate_path }}/.env && echo 'restored'"
+      register: env_restored
+      changed_when: true
+      failed_when: false
+      when: not env_after_pull.stat.exists
+
+    - name: Log .env restore
+      ansible.builtin.debug:
+        msg: ".env was overwritten by git — restored from .env.backup"
+      when: env_restored.changed | default(false)
+
+    # ── 5. Stop running containers ───────────────────────────────────────────
+    - name: Stop running containers before rebuild
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} down 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 6. Rebuild Docker image ──────────────────────────────────────────────
+    - name: Build Docker image from latest code
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker build -t {{ image_name }}:{{ image_tag }} ."
+      register: docker_build_result
+      changed_when: true
+
+    - name: Verify image was built
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'ok' || echo 'missing'"
+      register: image_check
+      changed_when: false
+      failed_when: image_check.stdout != 'ok'
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg: "{{ 'Image rebuilt successfully' if docker_build_result.changed else 'Image already current' }}"
+
+    # ── 7. Start containers with new image ───────────────────────────────────
+    - name: Start svc-idcreate containers
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} up -d --force-recreate"
+      register: compose_up
+      changed_when: true
+
+    # ── 8. Wait for api container to be running ──────────────────────────────
+    - name: Verify api container is running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ compose_project }}-api-1' | head -1 || true"
+      register: api_running
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: api_running.stdout | length > 0
+      failed_when: false
+
+    # ── 9. Summary ───────────────────────────────────────────────────────────
+    - name: Display update summary
+      ansible.builtin.debug:
+        msg: |
+          svc-idcreate updated (VRSCTEST):
+            source     → {{ 'updated' if git_pull_result.changed else 'already current' }}
+            image      → {{ image_name }}:{{ image_tag }} ({{ 'rebuilt' if docker_build_result.changed else 'unchanged' }})
+            containers → restarted
+            .env       → {{ 'restored from backup' if env_restored.changed | default(false) else 'preserved' }}
+
+          Verify:
+            curl http://10.200.0.14:5003/health
