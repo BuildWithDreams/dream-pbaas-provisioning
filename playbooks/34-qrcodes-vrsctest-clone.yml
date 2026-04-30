@@ -10,7 +10,7 @@
   hosts: production
   become: false
   vars:
-    qr_repo_url: "https://github.com/VerusCoin/verus-identity-update-qr-creator-main.git"
+    qr_repo_url: "https://github.com/BuildWithDreams/verus-identity-update-qr-creator-main.git"
     qr_repo_dest: "verus-identity-update-qr-creator-main"
     qr_path: "/home/{{ ansible_user }}/{{ qr_repo_dest }}"
     qr_path_fallback: "/home/{{ ansible_user }}/verus-identity-qr-creator"
