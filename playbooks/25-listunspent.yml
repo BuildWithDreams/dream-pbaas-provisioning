@@ -41,7 +41,7 @@
         vrsc_utxo_count: 0
         vrsc_utxo_total: "0"
         vrsc_online: false
-      when: not (vrsc_listunspent.stdout is search('['))
+      when: "'\"confirmations\"' not in vrsc_listunspent.stdout"
 
     - name: Parse VRSC utxos
       ansible.builtin.set_fact:
@@ -49,7 +49,7 @@
         vrsc_utxo_count: "{{ (vrsc_listunspent.stdout | from_json) | length }}"
         vrsc_utxo_total: "{{ '%.8f' | format((vrsc_listunspent.stdout | from_json) | sum(attribute='amount') | float) }}"
         vrsc_online: true
-      when: vrsc_listunspent.stdout is search('[')
+      when: "'\"confirmations\"' in vrsc_listunspent.stdout"
 
     # ── Parse vDEX ──────────────────────────────────────────────────────────────
     - name: Set vDEX offline defaults
@@ -58,7 +58,7 @@
         vdex_utxo_count: 0
         vdex_utxo_total: "0"
         vdex_online: false
-      when: not (vdex_listunspent.stdout is search('['))
+      when: "'\"confirmations\"' not in vdex_listunspent.stdout"
 
     - name: Parse vDEX utxos
       ansible.builtin.set_fact:
@@ -66,7 +66,7 @@
         vdex_utxo_count: "{{ (vdex_listunspent.stdout | from_json) | length }}"
         vdex_utxo_total: "{{ '%.8f' | format((vdex_listunspent.stdout | from_json) | sum(attribute='amount') | float) }}"
         vdex_online: true
-      when: vdex_listunspent.stdout is search('[')
+      when: "'\"confirmations\"' in vdex_listunspent.stdout"
 
     # ── Summary ─────────────────────────────────────────────────────────────────
     - name: Display UTXO summary
@@ -90,7 +90,7 @@
       ansible.builtin.assert:
         that:
           - "vrsc_listunspent.rc == 0"
-          - "vrsc_listunspent.stdout is search('[')"
+          - "'\"confirmations\"' in vrsc_listunspent.stdout"
         fail_msg: "VRSC listunspent failed — {{ vrsc_listunspent.stderr | default(vrsc_listunspent.stdout) }}"
         success_msg: "VRSC listunspent returned valid JSON"
       when: vrsc_online
@@ -99,7 +99,7 @@
       ansible.builtin.assert:
         that:
           - "vdex_listunspent.rc == 0"
-          - "vdex_listunspent.stdout is search('[')"
+          - "'\"confirmations\"' in vdex_listunspent.stdout"
         fail_msg: "vDEX listunspent failed — {{ vdex_listunspent.stderr | default(vdex_listunspent.stdout) }}"
         success_msg: "vDEX listunspent returned valid JSON"
       when: vdex_online
