@@ -2,8 +2,9 @@
 # Purpose: Ensure verus-identity-update-qr-creator-main is present on target host.
 #          Priority: (1) use existing verus-identity-qr-creator clone if present,
 #                    (2) fall back to git clone --depth=1 from GitHub.
-# Run with: ansible-playbook -i inventory.ini playbooks/34-qrcodes-clone.yml
+# Run with: ansible-playbook -i inventory.ini playbooks/34-qrcodes-vrsctest-clone.yml
 # Idempotent: safe to re-run — skips if target already exists.
+# Next: run 34b-qrcodes-vrsctest-configure.yml to write config.js before building.
 ---
 - name: Clone QRcodes repository
   hosts: production

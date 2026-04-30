@@ -1,8 +1,8 @@
 # Playbook: 36-qrcodes-deploy.yml
 # Purpose: Deploy the QRcode creator container on net-vrsctest at 10.200.0.13.
 #          Uses the Docker image built by 35-qrcodes-build.yml.
-# Run with: ansible-playbook -i inventory.ini playbooks/36-qrcodes-deploy.yml
-# Requires: 35-qrcodes-build.yml (image must exist)
+# Run with: ansible-playbook -i inventory.ini playbooks/36-qrcodes-vrsctest-deploy.yml
+# Requires: 35-qrcodes-vrsctest-build.yml (image must exist, with config.js baked in)
 # Idempotent: safe to re-run — stops old container before starting fresh.
 ---
 - name: Deploy QRcode creator for VRSCTEST

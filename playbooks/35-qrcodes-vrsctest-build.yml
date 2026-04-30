@@ -1,10 +1,11 @@
 # Playbook: 35-qrcodes-build.yml
 # Purpose: Build the QRcode creator Docker image for VRSCTEST.
 #          Tagged as buildwithdreams/verus-qr-creator:vrsctest.
-# Run with: ansible-playbook -i inventory.ini playbooks/35-qrcodes-build.yml
+# Run with: ansible-playbook -i inventory.ini playbooks/35-qrcodes-vrsctest-build.yml
 #           -e qrcodes_rebuild=true   (force clean build, bypass cache)
 # Idempotent: skips if image exists and qrcodes_rebuild!=true.
-# Requires: 34-qrcodes-clone.yml (repo must be cloned).
+# Requires: 34-qrcodes-vrsctest-clone.yml (repo must be cloned)
+#           AND 34b-qrcodes-vrsctest-configure.yml (config.js must exist — baked into image)
 ---
 - name: Build QRcode creator Docker image for VRSCTEST
   hosts: production
@@ -51,7 +52,6 @@
           docker build
           --no-cache
           --tag {{ image_name }}:{{ image_tag }}
-          --tag {{ image_name }}:latest
           --file {{ dockerfile_path }}
           {{ qr_path }}
       register: build_result
