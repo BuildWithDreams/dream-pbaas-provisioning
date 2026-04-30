@@ -50,6 +50,9 @@
         msg: |
           {% if vrsctest_online %}
           VRSCTEST — {{ vrsctest_utxo_count }} UTXO(s)  ·  total {{ vrsctest_utxo_total }} VRSCTEST
+          {% for utxo in vrsctest_utxos %}
+            txid={{ utxo.txid }}  vout={{ utxo.vout }}  amount={{ utxo.amount }}  confirmations={{ utxo.confirmations }}
+          {% endfor %}
           {% else %}
           VRSCTEST — offline or no wallet
           Last output: {{ vrsctest_listunspent.stderr | default(vrsctest_listunspent.stdout) }}
