@@ -22,7 +22,7 @@ This is a **self-documenting, repeatable Autonomous Infrastructure model**:
 ## File Tree
 
 ```
-provisioning/
+dream-pbaas-provisioning/
 ├── README.md              # Documentation + founding principles + troubleshooting
 ├── ansible.cfg            # Ansible configuration
 ├── inventory.ini          # ⚠️ Replace YOUR_TARGET_IP before running
@@ -46,7 +46,7 @@ pip install ansible --break-system-packages
 #    - group_vars/production.yml: set target IP, SSH user, SSH key path
 
 # 3. Run playbooks in order
-cd provisioning
+cd dream-pbaas-provisioning
 ansible-playbook -i inventory.ini playbooks/00-ping.yml   # verify connectivity
 ansible-playbook -i inventory.ini playbooks/01-docker.yml  # install Docker
 ansible-playbook -i inventory.ini playbooks/02-clone-repos.yml  # clone repos

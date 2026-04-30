@@ -8,7 +8,7 @@ This repo contains **two forms of documentation** that should always stay in syn
 
 - The **source of truth** for the agent's knowledge of this project
 - **Embedded in the repo** so documentation and code cannot drift apart
-- Referenced from `~/.hermes/skills/devops/ansible-provisioning-workflow/` as a symlink or local skill
+- Referenced from `~/.hermes/skills/ansible-provisioning/` as a local skill (sourced from `SKILL.md` here)
 
 ### Skill Architecture
 
@@ -20,8 +20,7 @@ BuildWithDreams/dream-pbaas-provisioning/
 └── ...
 
 ~/.hermes/skills/
-└── devops/
-    └── ansible-provisioning-workflow/  → symlink or local copy → ~/provisioning/SKILL.md
+└── ansible-provisioning/   → sourced from ~/dream-pbaas-provisioning/SKILL.md
 ```
 
 **Why embedded in the repo and not in the skills hub?**
