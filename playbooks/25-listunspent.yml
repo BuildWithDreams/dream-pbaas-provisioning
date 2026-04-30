@@ -69,27 +69,13 @@
       when: "'\"confirmations\"' in vdex_listunspent.stdout"
 
     # ── Summary ─────────────────────────────────────────────────────────────────
-    - name: Display UTXO summary
+    - name: Display raw listunspent output
       ansible.builtin.debug:
         msg: |
-          {% if vrsc_online %}
-          VRSC  — {{ vrsc_utxo_count }} UTXO(s)  ·  total {{ vrsc_utxo_total }} VRSC
-          {% for utxo in vrsc_utxos %}
-            txid={{ utxo.txid }}  vout={{ utxo.vout }}  amount={{ utxo.amount }}  confirmations={{ utxo.confirmations }}
-          {% endfor %}
-          {% else %}
-          VRSC  — offline or no wallet
-          Last output: {{ vrsc_listunspent.stderr | default(vrsc_listunspent.stdout) }}
-          {% endif %}
-          {% if vdex_online %}
-          vDEX  — {{ vdex_utxo_count }} UTXO(s)  ·  total {{ vdex_utxo_total }} vDEX
-          {% for utxo in vdex_utxos %}
-            txid={{ utxo.txid }}  vout={{ utxo.vout }}  amount={{ utxo.amount }}  confirmations={{ utxo.confirmations }}
-          {% endfor %}
-          {% else %}
-          vDEX  — offline or no wallet
-          Last output: {{ vdex_listunspent.stderr | default(vdex_listunspent.stdout) }}
-          {% endif %}
+          VRSC:
+          {{ vrsc_listunspent.stdout }}
+          vDEX:
+          {{ vdex_listunspent.stdout }}
 
     # ── Assertions ──────────────────────────────────────────────────────────────
     - name: Assert VRSC returned valid JSON
