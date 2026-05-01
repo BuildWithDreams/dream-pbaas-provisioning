@@ -1,0 +1,44 @@
+# Playbook: 47-idcreate-restart.yml
+# Purpose: Restart svc-idcreate containers to pick up new .env changes.
+#          Use this after editing ~/svc-idcreate/.env (new env vars).
+#          docker compose restart does NOT re-read .env — use up --force-recreate.
+# Run with: ansible-playbook -i inventory.ini playbooks/47-idcreate-restart.yml
+# Idempotent: safe to re-run.
+---
+- name: Restart svc-idcreate to pick up new .env
+  hosts: production
+  become: false
+  vars:
+    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
+    compose_project: "dev200_idcreate"
+
+  tasks:
+    - name: Restart containers with force-recreate to pick up .env changes
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} up -d --force-recreate"
+      register: compose_restart
+      changed_when: true
+
+    - name: Wait for containers to be healthy
+      ansible.builtin.shell:
+        cmd: "docker ps --format name | grep -E '{{ compose_project }}-(api|worker)-1' | wc -l | tr -d ' '"
+      register: container_check
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: container_check.stdout | int >= 2
+      failed_when: false
+
+    - name: Verify API is responding
+      ansible.builtin.shell:
+        cmd: "curl -s --max-time 8 http://10.200.0.14:5003/health"
+      register: health_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display restart summary
+      ansible.builtin.debug:
+        msg: |
+          svc-idcreate restarted:
+            containers → {{ compose_project }}-api-1, {{ compose_project }}-worker-1
+            api health → {{ health_check.stdout }}
