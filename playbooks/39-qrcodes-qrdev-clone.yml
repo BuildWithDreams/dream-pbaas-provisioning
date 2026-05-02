@@ -1,0 +1,57 @@
+# Playbook: 39-qrcodes-qrdev-clone.yml
+# Purpose: Clone imylomylo/verus-identity-update-qr-creator-main to target host.
+#          This is the developer's own fork — kept separate from the BWD production fork.
+#          Cloned to: /home/<user>/verus-identity-update-qr-creator-dev
+# Run with: ansible-playbook -i inventory.ini playbooks/39-qrcodes-qrdev-clone.yml
+# Idempotent: safe to re-run — skips if target already exists.
+# Next: run 40-qrcodes-qrdev-configure.yml to write config.js before building.
+---
+- name: Clone qrdev repository (imylomylo fork)
+  hosts: production
+  become: false
+  vars:
+    qr_repo_url: "https://github.com/imylomylo/verus-identity-update-qr-creator-main.git"
+    qr_repo_dest: "verus-identity-update-qr-creator-dev"
+    qr_path: "/home/{{ ansible_user }}/{{ qr_repo_dest }}"
+
+  tasks:
+    # ── 1. Check if target already exists ─────────────────────────────────────────
+    - name: Check if target directory already exists
+      ansible.builtin.stat:
+        path: "{{ qr_path }}"
+      register: qr_dir_stat
+
+    - name: Display clone plan
+      ansible.builtin.debug:
+        msg: |
+          Target: {{ qr_path }}
+          {{ 'Already present — nothing to do.' if qr_dir_stat.stat.exists else ('Will git clone from ' + qr_repo_url) }}
+
+    # ── 2a. Skip if target already exists ────────────────────────────────────────
+    - name: Report target already present
+      ansible.builtin.set_fact:
+        clone_action: "skip"
+      when: qr_dir_stat.stat.exists
+
+    # ── 2b. Git clone ────────────────────────────────────────────────────────────
+    - name: Clone repository from GitHub
+      ansible.builtin.shell:
+        cmd: "git clone --depth=1 {{ qr_repo_url }} {{ qr_path }} 2>&1"
+      register: clone_result
+      changed_when: true
+      when: not qr_dir_stat.stat.exists
+
+    - name: Report clone result
+      ansible.builtin.set_fact:
+        clone_action: "cloned"
+      when: not qr_dir_stat.stat.exists
+
+    # ── 3. Summary ───────────────────────────────────────────────────────────────
+    - name: Display final status
+      ansible.builtin.debug:
+        msg: |
+          QRcode dev repo ready at {{ qr_path }}
+          Action: {{ clone_action }}
+          {{ 'Already present — skipped.' if clone_action == 'skip' else ('Cloned from ' + qr_repo_url) if clone_action == 'cloned' else '' }}
+          Source repo: imylomylo/verus-identity-update-qr-creator-main
+          Branch: main

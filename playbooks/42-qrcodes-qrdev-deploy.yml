@@ -1,0 +1,119 @@
+# Playbook: 42-qrcodes-qrdev-deploy.yml
+# Purpose: Deploy the qrdev container on net-vrsctest at 10.200.0.14.
+#          Uses the Docker image built by 41-qrcodes-qrdev-build.yml.
+#          Separate container, IP, and compose project from the production qrdev app.
+# Run with: ansible-playbook -i inventory.ini playbooks/42-qrcodes-qrdev-deploy.yml
+# Requires: 41-qrcodes-qrdev-build.yml (image must exist, with config.js baked in)
+# Idempotent: safe to re-run — stops old container before starting fresh.
+---
+- name: Deploy qrdev container for VRSCTEST
+  hosts: production
+  become: false
+  vars:
+    qr_repo_dest: "verus-identity-update-qr-creator-dev"
+    qr_path: "/home/{{ ansible_user }}/{{ qr_repo_dest }}"
+    compose_project: "dev200_qrdev"
+    container_name: "{{ compose_project }}-qr-1"
+    docker_network: "net-vrsctest"
+    qr_bind_ip: "10.200.0.14"
+    qr_bind_port: "3000"
+    image_name: "buildwithdreams/verus-qr-creator"
+    image_tag: "qrdev"
+
+  tasks:
+    # ── 1. Verify image exists ──────────────────────────────────────────────────
+    - name: Verify image is built
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'ok' || echo 'missing'"
+      register: image_check
+      changed_when: false
+      failed_when: image_check.stdout != 'ok'
+
+    # ── 2. Stop existing container if running ───────────────────────────────────
+    - name: Remove old container if it exists
+      ansible.builtin.shell:
+        cmd: "docker rm -f {{ container_name }} 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 3. Write docker-compose.yml ───────────────────────────────────────────────
+    - name: Create docker-compose.yml
+      ansible.builtin.copy:
+        content: |
+          # docker-compose.yml — Verus QR Creator qrdev (VRSCTEST)
+          # Built from: {{ image_name }}:{{ image_tag }}
+          version: "3.9"
+
+          services:
+            qr-creator:
+              image: {{ image_name }}:{{ image_tag }}
+              container_name: {{ container_name }}
+              hostname: vrsctest-qrdev
+              networks:
+                pbaas_network:
+                  ipv4_address: {{ qr_bind_ip }}
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+                interval: "30s"
+                timeout: "10s"
+                retries: 3
+                start_period: "15s"
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+
+          networks:
+            pbaas_network:
+              name: {{ docker_network }}
+              external: true
+        dest: "{{ qr_path }}/docker-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: compose_written
+
+    - name: Display compose file path
+      ansible.builtin.debug:
+        msg: "docker-compose.yml written to {{ qr_path }}/docker-compose.yml"
+
+    # ── 4. Deploy with docker compose ───────────────────────────────────────────
+    - name: Start qrdev container
+      ansible.builtin.shell:
+        cmd: "timeout 120 docker compose -f {{ qr_path }}/docker-compose.yml -p {{ compose_project }} up -d --force-recreate"
+      register: compose_up
+      changed_when: true
+
+    - name: Display deploy result
+      ansible.builtin.debug:
+        msg: "Container {{ container_name }} started: {{ compose_up.stdout_lines | join(' ') }}"
+
+    # ── 5. Wait for container to be running ─────────────────────────────────────
+    - name: Verify container is running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || true"
+      register: running_verify
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: running_verify.stdout | length > 0
+      failed_when: false
+
+    # ── 6. Summary ───────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          qrdev deployed (VRSCTEST):
+            container → {{ container_name }}
+            image     → {{ image_name }}:{{ image_tag }}
+            network   → {{ docker_network }}
+            IP        → {{ qr_bind_ip }}
+            port      → internal only (no host port — Caddy reaches via Docker network)
+            URL       → http://{{ qr_bind_ip }}:{{ qr_bind_port }}
+            URL       → https://qrdev.vrsctest.buildwithdreams.com (after Caddy route)
+
+          Verify:
+            ssh <host> "docker ps | grep qrdev"
+            curl -s http://{{ qr_bind_ip }}:{{ qr_bind_port }}/ | head
