@@ -67,11 +67,11 @@
       when: route_check.stdout == 'absent'
 
     # ── 4. Format Caddyfile after changes ───────────────────────────────────────
-    - name: Format Caddyfile
-      ansible.builtin.shell:
-        cmd: "docker exec {{ caddy_container }} caddy fmt --overwrite /config/caddy/Caddyfile 2>&1"
-      register: caddy_fmt
-      changed_when: true
+    # Note: /config/caddy is read-only in the Caddy container. Skip fmt and
+    # rely on caddy validate + reload to catch any syntax errors.
+    - name: Format Caddyfile (skip — read-only mount)
+      ansible.builtin.debug:
+        msg: "Skipping caddy fmt — /config/caddy is read-only. Validate + reload steps catch any syntax issues."
       when: route_check.stdout == 'absent'
 
     # ── 5. Verify Caddyfile is valid before reload ─────────────────────────────
