@@ -15,7 +15,7 @@
     compose_project: "dev200_qrdev"
     container_name: "{{ compose_project }}-qr-1"
     docker_network: "net-vrsctest"
-    qr_bind_ip: "10.200.0.14"
+    qr_bind_ip: "10.200.0.4"
     qr_bind_port: "3000"
     image_name: "buildwithdreams/verus-qr-creator"
     image_tag: "qrdev"

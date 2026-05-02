@@ -13,7 +13,7 @@
     caddy_path: "/home/{{ ansible_user }}/caddy"
     caddy_container: "mains_blue_caddy-caddy-1"
     docker_network: "net-vrsctest"
-    qr_bind_ip: "10.200.0.14"
+    qr_bind_ip: "10.200.0.4"
     qr_port: "3000"
     qr_domain: "qrdev.vrsctest.buildwithdreams.com"
 
