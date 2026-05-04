@@ -1,0 +1,281 @@
+# Playbook: 48-qrcodes-vrsctest-update.yml
+# Purpose: Update qrcodes to latest GitHub commits, re-fetch signer WIF,
+#          re-write config.js with new service signer values, rebuild Docker image,
+#          and restart the container on net-vrsctest.
+#
+#          This is a convenience wrapper that chains:
+#            1. Pull latest from GitHub
+#            2. Fetch signer WIF (playbook 49, reusable)
+#            3. Re-write config.js (playbook 34b)
+#            4. Rebuild Docker image (playbook 35)
+#            5. Redeploy container (playbook 36)
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/48-qrcodes-vrsctest-update.yml
+# Requires: 34-qrcodes-vrsctest-clone.yml must have been run at least once.
+# Idempotent: image is always rebuilt. config.js and WIF refreshed each run.
+---
+- name: Update qrcodes VRSCTEST (pull + fetch WIF + reconfigure + rebuild + restart)
+  hosts: production
+  become: false
+  vars:
+    qr_repo_url: "https://github.com/BuildWithDreams/verus-identity-update-qr-creator-main.git"
+    qr_repo_dest: "verus-identity-update-qr-creator-main"
+    qr_path: "/home/{{ ansible_user }}/{{ qr_repo_dest }}"
+    compose_project: "dev200_qr"
+    container_name: "{{ compose_project }}-qr-1"
+    image_name: "buildwithdreams/verus-qr-creator"
+    image_tag: "vrsctest"
+    signer_wif_file: "/home/{{ ansible_user }}/.bwd_signer_wif"
+    vrsctest_container: "dev200-vrsctest-1"
+
+  tasks:
+    # ── 1. Verify repo exists ───────────────────────────────────────────────────
+    - name: Verify qrcode repository exists
+      ansible.builtin.stat:
+        path: "{{ qr_path }}"
+      register: qr_dir_stat
+      failed_when: not qr_dir_stat.stat.exists
+
+    # ── 2. Backup config.js if it exists (before pull) ───────────────────────────
+    - name: Backup existing config.js
+      ansible.builtin.shell:
+        cmd: "cp {{ qr_path }}/config.js {{ qr_path }}/config.js.backup 2>/dev/null && echo 'backed up' || echo 'no config.js to backup'"
+      register: config_backup
+      changed_when: true
+      failed_when: false
+
+    - name: Display backup status
+      ansible.builtin.debug:
+        msg: "{{ '.config.js.backup created' if 'backed up' in config_backup.stdout else 'No existing config.js to backup' }}"
+
+    # ── 3. Pull latest from GitHub ──────────────────────────────────────────────
+    - name: Pull latest qrcodes commits from GitHub
+      ansible.builtin.git:
+        repo: "{{ qr_repo_url }}"
+        dest: "{{ qr_path }}"
+        update: true
+        force: true
+        accept_hostkey: true
+      register: git_pull_result
+
+    - name: Display pull status
+      ansible.builtin.debug:
+        msg: "{{ 'Updated to latest commit' if git_pull_result.changed else 'Already up-to-date — no changes pulled' }}"
+
+    # ── 4. Fetch signer WIF (chain playbook 49 inline) ──────────────────────────
+    - name: Get primary address from identity on VRSCTEST
+      ansible.builtin.shell: |
+        docker exec {{ vrsctest_container }} \
+          verus -chain=VRSCTEST getidentity BWD@ 2>&1
+      register: identity_output
+      failed_when: false
+
+    - name: Fail if identity not found
+      ansible.builtin.fail:
+        msg: |
+          Identity 'BWD@' not found on VRSCTEST.
+          Output: {{ identity_output.stdout }}
+      when: identity_output.rc != 0
+
+    - name: Parse primaryaddresses from getidentity JSON
+      ansible.builtin.set_fact:
+        primary_address: "{{ (identity_output.stdout | from_json).identity.primaryaddresses[0] }}"
+
+    - name: Dump WIF for primary address
+      ansible.builtin.shell: |
+        docker exec {{ vrsctest_container }} \
+          verus -chain=VRSCTEST dumpprivkey {{ primary_address }} 2>&1
+      register: dumpprivkey_output
+      failed_when: false
+
+    - name: Fail if dumpprivkey failed
+      ansible.builtin.fail:
+        msg: "dumpprivkey failed for {{ primary_address }}: {{ dumpprivkey_output.stdout }}"
+      when: dumpprivkey_output.rc != 0
+
+    - name: Write SERVICE_SIGNER_WIF to temp file
+      ansible.builtin.copy:
+        content: "{{ dumpprivkey_output.stdout | trim }}"
+        dest: "{{ signer_wif_file }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      register: wif_written
+
+    - name: Read WIF back into variable
+      ansible.builtin.slurp:
+        src: "{{ signer_wif_file }}"
+      register: signer_wif_b64
+
+    - name: Set SERVICE_SIGNER_WIF fact
+      ansible.builtin.set_fact:
+        service_signer_wif: "{{ signer_wif_b64.content | b64decode | trim }}"
+
+    # ── 5. Re-write config.js ────────────────────────────────────────────────────
+    - name: Read vrsctest.conf for RPC credentials
+      ansible.builtin.slurp:
+        src: "/home/{{ ansible_user }}/docker-verusd/vrsctest/data_dir/vrsctest.conf"
+      register: vrsctest_conf_b64
+      failed_when: false
+
+    - name: Extract RPC credentials
+      ansible.builtin.set_fact:
+        vrsctest_rpcuser: "{{ vrsctest_conf_b64.content | b64decode | regex_findall('^rpcuser=(.+)$', multiline=True) | first | trim }}"
+        vrsctest_rpcpassword: "{{ vrsctest_conf_b64.content | b64decode | regex_findall('^rpcpassword=(.+)$', multiline=True) | first | trim }}"
+
+    - name: Validate service signer iaddress is set
+      ansible.builtin.assert:
+        that:
+          - bwd_service_signer_iaddress | length > 0
+        fail_msg: |
+          bwd_service_signer_iaddress is not set in group_vars/production.yml.
+          Add: bwd_service_signer_iaddress: "<i-address from verus -chain=VRSCTEST getidentity BWD@>"
+
+    - name: Write updated config.js
+      ansible.builtin.copy:
+        content: |
+          // config.js — auto-generated by ansible, do not commit
+          module.exports = {
+            RPC_HOST: "10.200.0.11",
+            RPC_PORT: 18843,
+            RPC_USER: "{{ vrsctest_rpcuser }}",
+            RPC_PASSWORD: "{{ vrsctest_rpcpassword }}",
+            SERVICE_SIGNER_IADDRESS: "{{ bwd_service_signer_iaddress }}",
+            SERVICE_SIGNER_WIF: "{{ service_signer_wif }}",
+          };
+        dest: "{{ qr_path }}/config.js"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      register: config_written
+
+    - name: Display config update
+      ansible.builtin.debug:
+        msg: |
+          config.js updated with SERVICE_SIGNER_IADDRESS → {{ bwd_service_signer_iaddress }}
+          SERVICE_SIGNER_WIF                              → <from {{ signer_wif_file }}>
+
+    # ── 5b. Write Dockerfile (not in git — recreated after git pull) ───────────
+    - name: Write Dockerfile
+      ansible.builtin.copy:
+        content: |
+          # Stage 1: Build TypeScript
+          FROM node:20-alpine AS builder
+          WORKDIR /build
+          RUN apk add --no-cache git
+          COPY package.json yarn.lock .yarnrc.yml ./
+          COPY .yarn .yarn/
+          COPY .yarnrc.yml ./
+          RUN yarn install --immutable || yarn install
+          COPY . .
+          RUN yarn build
+
+          # Stage 2: Minimal runtime
+          FROM node:20-alpine
+          WORKDIR /app
+          RUN apk add --no-cache curl
+          COPY --from=builder /build/dist ./dist
+          COPY --from=builder /build/config.js ./
+          COPY --from=builder /build/package.json ./
+          COPY --from=builder /build/node_modules ./node_modules
+          COPY --from=builder /build/views ./views
+          COPY --from=builder /build/public ./public
+          EXPOSE 3000
+          HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+            CMD curl -f http://localhost:3000/ || exit 1
+          CMD ["node", "dist/server.js"]
+        dest: "{{ qr_path }}/Dockerfile"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: dockerfile_written
+
+    # ── 6. Rebuild Docker image ──────────────────────────────────────────────────
+    - name: Stop old container before rebuild
+      ansible.builtin.shell:
+        cmd: "docker rm -f {{ container_name }} 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    - name: Build updated Docker image
+      ansible.builtin.shell:
+        cmd: "docker build --no-cache --tag {{ image_name }}:{{ image_tag }} --file {{ qr_path }}/Dockerfile {{ qr_path }}"
+      register: docker_build_result
+      changed_when: true
+
+    - name: Verify image was built
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'ok' || echo 'missing'"
+      register: image_check
+      failed_when: image_check.stdout != 'ok'
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg: "{{ 'Image rebuilt successfully' if docker_build_result.changed else 'Image unchanged' }}"
+
+    # ── 7. Redeploy container ────────────────────────────────────────────────────
+    - name: Write docker-compose.yml
+      ansible.builtin.copy:
+        content: |
+          # docker-compose.yml — Verus QR Creator (VRSCTEST)
+          version: "3.9"
+          services:
+            qr-creator:
+              image: {{ image_name }}:{{ image_tag }}
+              container_name: {{ container_name }}
+              hostname: vrsctest-qr-creator
+              networks:
+                pbaas_network:
+                  ipv4_address: 10.200.0.13
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+                interval: "30s"
+                timeout: "10s"
+                retries: 3
+                start_period: "15s"
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+          networks:
+            pbaas_network:
+              name: net-vrsctest
+              external: true
+        dest: "{{ qr_path }}/docker-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Start container with updated image
+      ansible.builtin.shell:
+        cmd: "cd {{ qr_path }} && docker compose -p {{ compose_project }} up -d --force-recreate"
+      register: compose_up
+      changed_when: true
+
+    # ── 8. Wait for container to be healthy ─────────────────────────────────────
+    - name: Wait for container to be running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || true"
+      register: running_verify
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: running_verify.stdout | length > 0
+      failed_when: false
+
+    # ── 9. Summary ───────────────────────────────────────────────────────────────
+    - name: Display update summary
+      ansible.builtin.debug:
+        msg: |
+          qrcodes VRSCTEST updated:
+            source   → {{ 'updated' if git_pull_result.changed else 'already current' }}
+            image    → {{ image_name }}:{{ image_tag }} ({{ 'rebuilt' if docker_build_result.changed else 'unchanged' }})
+            container → {{ container_name }} ({{ 'restarted' if compose_up.changed else 'unchanged' }})
+            config   → SERVICE_SIGNER_IADDRESS + SERVICE_SIGNER_WIF refreshed
+            WIF src  → {{ signer_wif_file }}
+
+          Verify:
+            curl -I https://qrcodes.vrsctest.buildwithdreams.com
+            ssh <bwd-host> "docker ps | grep qr"

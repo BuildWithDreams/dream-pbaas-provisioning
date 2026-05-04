@@ -39,3 +39,11 @@ verus_networks:
   - name: net-vrsctest
     subnet: 10.200.0.0/24
     bridge_suffix: SP1020001
+
+# ── Service Signer ───────────────────────────────────────────────────────────
+# Identity used by qrcodes for the SERVICE_SIGNER feature.
+# IADDRESS: identityaddress from `verus -chain=VRSCTEST getidentity <identity@>`
+#           — safe to store in inventory.
+# WIF:       private key for the identity's primary r-address.
+#           — NEVER stored here; always fetched at runtime by playbook 49.
+bwd_service_signer_iaddress: "i7o9p3uRfNdtuG8GptWBPhAf4rK39bhJp1"

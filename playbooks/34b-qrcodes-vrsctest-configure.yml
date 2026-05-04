@@ -1,6 +1,9 @@
-# Playbook: 34b-qrcodes-configure.yml
+# Playbook: 34b-qrcodes-vrsctest-configure.yml
 # Purpose: Write config.js for the qrcodes app from VRSCTEST RPC credentials.
 #          Must run BEFORE 35-qrcodes-build.yml — config.js is baked into the image.
+#          SERVICE_SIGNER_IADDRESS is read from inventory/group_vars/production.yml.
+#          SERVICE_SIGNER_WIF is read from ~/.bwd_signer_wif (written by playbook 49).
+#          Run playbook 49 first to fetch the WIF before running this step.
 # Run with: ansible-playbook -i inventory.ini playbooks/34b-qrcodes-vrsctest-configure.yml
 # Requires: 34-qrcodes-vrsctest-clone.yml (repo must be cloned)
 # Idempotent: safe to re-run — overwrites config.js each time.
@@ -12,6 +15,8 @@
     qr_repo_dest: "verus-identity-update-qr-creator-main"
     qr_path: "/home/{{ ansible_user }}/{{ qr_repo_dest }}"
     vrsctest_conf_path: "/home/{{ ansible_user }}/docker-verusd/vrsctest/data_dir/vrsctest.conf"
+    # Written by playbook 49 — must be run first to fetch the WIF
+    signer_wif_file: "/home/{{ ansible_user }}/.bwd_signer_wif"
 
   tasks:
     # ── 1. Verify repo is cloned ─────────────────────────────────────────────────
@@ -51,7 +56,41 @@
           - vrsctest_rpcpassword | length > 0
         fail_msg: "Could not extract rpcuser/rpcpassword from vrsctest.conf"
 
-    # ── 4. Write config.js ─────────────────────────────────────────────────────
+    # ── 4. Read SERVICE_SIGNER_WIF from file written by playbook 49 ─────────────
+    - name: Fail if signer WIF file is missing
+      ansible.builtin.fail:
+        msg: |
+          {{ signer_wif_file }} not found.
+          Run playbook 49-fetch-signer-wif.yml first to fetch the SERVICE_SIGNER_WIF.
+      when: not (ansible_user == 'root') and not (lookup('file', signer_wif_file, errors='ignore') | length > 0)
+
+    - name: Read SERVICE_SIGNER_WIF from temp file
+      ansible.builtin.slurp:
+        src: "{{ signer_wif_file }}"
+      register: signer_wif_b64
+      failed_when: false
+
+    - name: Fail if WIF could not be read
+      ansible.builtin.fail:
+        msg: |
+          Could not read SERVICE_SIGNER_WIF from {{ signer_wif_file }}.
+          Run playbook 49-fetch-signer-wif.yml first.
+      when: signer_wif_b64.failed | default(false)
+
+    - name: Set SERVICE_SIGNER_WIF fact
+      ansible.builtin.set_fact:
+        service_signer_wif: "{{ signer_wif_b64.content | b64decode | trim }}"
+
+    # ── 5. Validate SERVICE_SIGNER_IADDRESS from inventory ────────────────────
+    - name: Fail if SERVICE_SIGNER_IADDRESS is not set in inventory
+      ansible.builtin.fail:
+        msg: |
+          bwd_service_signer_iaddress is not set in group_vars/production.yml.
+          Add: bwd_service_signer_iaddress: "<i-address>"
+          The i-address is the identityaddress from: verus -chain=VRSCTEST getidentity <identity@>
+      when: not (bwd_service_signer_iaddress | length > 0)
+
+    # ── 6. Write config.js ─────────────────────────────────────────────────────
     - name: Write config.js
       ansible.builtin.copy:
         content: |
@@ -61,6 +100,8 @@
             RPC_PORT: 18843,
             RPC_USER: "{{ vrsctest_rpcuser }}",
             RPC_PASSWORD: "{{ vrsctest_rpcpassword }}",
+            SERVICE_SIGNER_IADDRESS: "{{ bwd_service_signer_iaddress }}",
+            SERVICE_SIGNER_WIF: "{{ service_signer_wif }}",
           };
         dest: "{{ qr_path }}/config.js"
         owner: "{{ ansible_user }}"
@@ -68,7 +109,7 @@
         mode: '0600'
       register: config_written
 
-    # ── 4b. Write Dockerfile ──────────────────────────────────────────────────
+    # ── 6b. Write Dockerfile ──────────────────────────────────────────────────
     - name: Write Dockerfile
       ansible.builtin.copy:
         content: |
@@ -106,16 +147,18 @@
         mode: '0644'
       register: dockerfile_written
 
-    # ── 5. Summary ──────────────────────────────────────────────────────────────
+    # ── 7. Summary ──────────────────────────────────────────────────────────────
     - name: Display configuration summary
       ansible.builtin.debug:
         msg: |
           qrcodes configured for VRSCTEST:
             config.js  → {{ qr_path }}/config.js
             Dockerfile → {{ qr_path }}/Dockerfile
-            RPC_HOST  → 10.200.0.11
-            RPC_PORT  → 18843
-            RPC_USER  → {{ vrsctest_rpcuser }}
+            RPC_HOST   → 10.200.0.11
+            RPC_PORT   → 18843
+            RPC_USER   → {{ vrsctest_rpcuser }}
             RPC_PASSWORD → <redacted>
+            SERVICE_SIGNER_IADDRESS → {{ bwd_service_signer_iaddress }}
+            SERVICE_SIGNER_WIF       → <read from {{ signer_wif_file }}>
 
           Next: run 35-qrcodes-vrsctest-build.yml to build the image

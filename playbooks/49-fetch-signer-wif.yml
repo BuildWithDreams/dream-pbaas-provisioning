@@ -1,0 +1,94 @@
+# Playbook: 49-fetch-signer-wif.yml
+# Purpose: Fetch the WIF private key for the primary address of a Verus identity.
+#          The WIF is written to ~/.bwd_signer_wif on BWD — this file is NOT committed.
+#          SERVICE_SIGNER_WIF is never stored in inventory or code; it is always fetched
+#          at runtime from the running vrsctest daemon.
+# Run with: ansible-playbook -i inventory.ini playbooks/49-fetch-signer-wif.yml
+#           -e identity_name=BWD@         (optional, defaults to BWD@)
+#           -e chain=VRSCTEST              (optional, defaults to VRSCTEST)
+# Reusable in: other node ops playbooks that need the signer WIF for a config step.
+---
+- name: Fetch SERVICE_SIGNER_WIF from vrsctest daemon
+  hosts: production
+  become: false
+  vars:
+    # Identity whose primary address WIF should be fetched (override with -e identity_name=SomeOther@)
+    identity_name: "BWD@"
+    # Chain the identity lives on
+    vrsctest_chain: "VRSCTEST"
+    # vrsctest daemon container name on BWD
+    vrsctest_container: "dev200-vrsctest-1"
+    # Local temp file to write the WIF (readable only by ansible_user)
+    signer_wif_file: "/home/{{ ansible_user }}/.bwd_signer_wif"
+
+  tasks:
+    # ── 1. Get identity primaryaddress from running vrsctest daemon ──────────────
+    - name: Get primary address from identity
+      ansible.builtin.shell: |
+        docker exec {{ vrsctest_container }} \
+          verus -chain={{ vrsctest_chain }} getidentity {{ identity_name }} 2>&1
+      register: identity_output
+      failed_when: false
+
+    - name: Fail if identity not found
+      ansible.builtin.fail:
+        msg: |
+          Identity '{{ identity_name }}' not found on chain '{{ chain }}'.
+          Check that the daemon is running and the identity exists.
+          Output: {{ identity_output.stdout }}
+      when: identity_output.rc != 0
+
+    - name: Parse primaryaddresses from getidentity JSON
+      ansible.builtin.set_fact:
+        primary_address: "{{ (identity_output.stdout | from_json).identity.primaryaddresses[0] }}"
+
+    - name: Validate primary_address extracted
+      ansible.builtin.assert:
+        that:
+          - primary_address | length > 0
+        fail_msg: "Could not extract primaryaddresses[0] from getidentity output for {{ identity_name }}"
+
+    # ── 2. Dump WIF for the primary address ───────────────────────────────────────
+    - name: Dump WIF private key for primary address
+      ansible.builtin.shell: |
+        docker exec {{ vrsctest_container }} \
+          verus -chain={{ vrsctest_chain }} dumpprivkey {{ primary_address }} 2>&1
+      register: dumpprivkey_output
+      failed_when: false
+
+    - name: Fail if dumpprivkey failed
+      ansible.builtin.fail:
+        msg: |
+          dumpprivkey failed for address {{ primary_address }}.
+          The daemon wallet may be locked or the address not in this wallet.
+          Output: {{ dumpprivkey_output.stdout }}
+      when: dumpprivkey_output.rc != 0
+
+    - name: Set WIF fact (trim whitespace)
+      ansible.builtin.set_fact:
+        service_signer_wif: "{{ dumpprivkey_output.stdout | trim }}"
+
+    # ── 3. Write WIF to temp file for consumption by calling playbooks ───────────
+    - name: Write WIF to temp file
+      ansible.builtin.copy:
+        content: |
+          {{ service_signer_wif }}
+        dest: "{{ signer_wif_file }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      register: wif_written
+
+    # ── 4. Summary ───────────────────────────────────────────────────────────────
+    - name: Display fetch result
+      ansible.builtin.debug:
+        msg: |
+          SERVICE_SIGNER_WIF fetched for {{ identity_name }} ({{ vrsctest_chain }}):
+            identity    → {{ identity_name }}
+            iaddress    → {{ bwd_service_signer_iaddress | default('(not set — add to inventory)') }}
+            r-address   → {{ primary_address }}
+            WIF file    → {{ signer_wif_file }}
+            chain       → {{ vrsctest_chain }}
+            container   → {{ vrsctest_container }}
+
+          WIF written to {{ signer_wif_file }} — never commit this file.
