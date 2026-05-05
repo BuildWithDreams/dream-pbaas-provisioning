@@ -1,0 +1,344 @@
+# Playbook: 50b-s-nomp-configure.yml
+# Purpose: Configure s-nomp for VRSCTEST — write config.json, website.json, Dockerfile.
+#          Reads VRSCTEST daemon credentials from vrsctest.conf at first run.
+# Run with: ansible-playbook -i inventory.ini playbooks/50b-s-nomp-configure.yml
+#           -e "pool_address=RTEST..."
+# Requires: 50-s-nomp-clone.yml (repo cloned)
+# Idempotent: safe to re-run — replaces config files each time.
+---
+- name: Configure s-nomp for VRSCTEST
+  hosts: production
+  become: false
+  vars:
+    s_nomp_path: "/home/{{ ansible_user }}/s-nomp"
+    docker_verusd_path: "/home/{{ ansible_user }}/docker-verusd"
+    vrsctest_conf: "{{ docker_verusd_path }}/vrsctest/data_dir/vrsctest.conf"
+
+    # Pool settings
+    pool_host: "pool.vrsctest.buildwithdreams.com"
+    pool_fee: "0.5"
+    pool_name: "BuildWithDreams Testnet"
+
+    # Network
+    daemon_host: "10.200.0.11"
+    daemon_rpc_port: "18843"
+
+    # Stratum ports
+    stratum_internal_port: "3333"
+    stratum_external_port: "3334"
+    website_port: "3000"
+
+    # Pool wallet (must be provided via -e; defaults to empty for testnet)
+    pool_address: "{{ pool_address | default('') }}"
+    pool_passphrase: "{{ pool_passphrase | default('') }}"
+
+  tasks:
+    # ── 0. Require pool_address ─────────────────────────────────────────────────
+    - name: Require pool_address parameter
+      ansible.builtin.assert:
+        that:
+          - pool_address is defined
+          - pool_address | length > 0
+        fail_msg: "pool_address must be provided via -e \"pool_address=RTEST...\""
+        success_msg: "pool_address validated"
+
+    # ── 1. Verify s-nomp was cloned ────────────────────────────────────────────
+    - name: Verify s-nomp repo exists
+      ansible.builtin.stat:
+        path: "{{ s_nomp_path }}"
+      register: s_nomp_stat
+      failed_when: not s_nomp_stat.stat.exists
+
+    # ── 2. Read VRSCTEST RPC credentials from daemon conf ──────────────────────
+    - name: Check for existing vrsctest.conf
+      ansible.builtin.stat:
+        path: "{{ vrsctest_conf }}"
+      register: vrsctest_conf_stat
+
+    - name: Extract rpcuser from vrsctest.conf
+      ansible.builtin.shell:
+        cmd: "grep '^rpcuser=' {{ vrsctest_conf }} 2>/dev/null | head -1 | cut -d= -f2 || echo ''"
+      register: daemon_rpcuser
+      changed_when: false
+      failed_when: false
+      when: vrsctest_conf_stat.stat.exists
+
+    - name: Extract rpcpassword from vrsctest.conf
+      ansible.builtin.shell:
+        cmd: "grep '^rpcpassword=' {{ vrsctest_conf }} 2>/dev/null | head -1 | cut -d= -f2 || echo ''"
+      register: daemon_rpcpass
+      changed_when: false
+      failed_when: false
+      when: vrsctest_conf_stat.exists
+
+    - name: Fail if vrsctest.conf not found
+      ansible.builtin.fail:
+        msg: |
+          vrsctest.conf not found at {{ vrsctest_conf }}.
+          Start the VRSCTEST daemon first (08b-start-vrsctest.yml).
+      when: not vrsctest_conf_stat.stat.exists
+
+    - name: Fail if credentials not extractable
+      ansible.builtin.fail:
+        msg: "Could not extract rpcuser/rpcpassword from vrsctest.conf"
+      when: daemon_rpcuser.stdout | trim | length == 0 or daemon_rpcpass.stdout | trim | length == 0
+
+    - name: Set credential facts
+      ansible.builtin.set_fact:
+        daemon_rpc_user: "{{ daemon_rpcuser.stdout | trim }}"
+        daemon_rpc_pass: "{{ daemon_rpcpass.stdout | trim }}"
+
+    - name: Display credential source
+      ansible.builtin.debug:
+        msg: "Using VRSCTEST daemon credentials from vrsctest.conf — user={{ daemon_rpc_user }}"
+
+    # ── 3. Write config.json ────────────────────────────────────────────────────
+    - name: Write s-nomp config.json
+      ansible.builtin.copy:
+        content: |
+          {
+            "enabled": true,
+            "coin": "verus",
+
+            "logging": {
+              "verbosity": "debug",
+              "logConsole": true,
+              "logFiles": true,
+              "logLevel": "info",
+              "syslog": false
+            },
+
+            "daemons": [
+              {
+                "host": "{{ daemon_host }}",
+                "port": {{ daemon_rpc_port }},
+                "user": "{{ daemon_rpc_user }}",
+                "password": "{{ daemon_rpc_pass }}"
+              }
+            ],
+
+            "poolserver": {
+              "enabled": true,
+              "parallel": 3,
+              "ports": [
+                {
+                  "port": {{ stratum_internal_port }},
+                  "description": "Internal stratum",
+                  "tls": false,
+                  "tlsPEMFile": "",
+                  "ipv4Only": true
+                },
+                {
+                  "port": {{ stratum_external_port }},
+                  "description": "External stratum",
+                  "tls": false,
+                  "tlsPEMFile": "",
+                  "ipv4Only": true
+                }
+              ],
+              "varDiff": {
+                "minDiff": 0.001,
+                "maxDiff": 65536,
+                "targetTime": 15,
+                "retargetTime": 60,
+                "variancePercent": 20
+              },
+              "shareTrust": {
+                "enabled": true,
+                "minHash": 10,
+                "resetTimer": 60
+              }
+            },
+
+            "paymentprocessing": {
+              "enabled": true,
+              "interval": 120,
+              "daemon": {
+                "host": "{{ daemon_host }}",
+                "port": {{ daemon_rpc_port }},
+                "user": "{{ daemon_rpc_user }}",
+                "password": "{{ daemon_rpc_pass }}"
+              },
+              "paymentAddress": "{{ pool_address }}",
+              "minimumPayment": 0.1,
+              "batchPayout": true,
+              "minConf": 3,
+              "minPayment": 0.1,
+              "coinPrecision": 8
+            },
+
+            "rewardRecipients": {
+              "{{ pool_address }}": {{ pool_fee }}
+            },
+
+            "coinSettings": {
+              "verus": {
+                "name": "VRSC",
+                "symbol": "VRSC",
+                "algorithm": "equihash",
+                "hasGetinfo": true,
+                "hashrateMultiplier": 1,
+                "payFoundersReward": true,
+                "foundersRewardAddress": "",
+                "enforceP2sh": true,
+                "requireStake": true,
+                "txMessages": true,
+                "PoS": true,
+                "isPublic": true,
+                "explorer": {
+                  "getinfo": "https://explorer.verus.io/api/getinfo",
+                  "tx": "https://explorer.verus.io/api/tx",
+                  "block": "https://explorer.verus.io/api/block"
+                }
+              }
+            },
+
+            "genesisHash": "",
+            "pubkey": "",
+            "address": "{{ pool_address }}",
+            "_comment0": "=== VRSCTEST POOL CONFIG ===",
+            "chain": "VRSCTEST",
+            "isTestnet": true,
+            "rlmName": "verus"
+          }
+        dest: "{{ s_nomp_path }}/config.json"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: config_written
+
+    - name: Display config.json status
+      ansible.builtin.debug:
+        msg: "config.json written to {{ s_nomp_path }}/config.json"
+
+    # ── 4. Write website.json ──────────────────────────────────────────────────
+    - name: Write website.json
+      ansible.builtin.copy:
+        content: |
+          {
+            "siteTitle": "{{ pool_name }}",
+            "siteLogo": "",
+            "poolHost": "{{ pool_host }}",
+            "poolFee": "{{ pool_fee }}%",
+            "coin": "VRSC",
+            "coinDisplayName": "Verus",
+            "useserverclientsidewallet": false,
+            "showWorkersTable": true,
+            "showWorkersTablePerPort": false,
+            "poolFeeAddress": "{{ pool_address }}",
+            "version": "1.0.0",
+            "paymentInterval": "2 minutes",
+            "minimumPayment": "0.1 VRSC",
+            "marketPriceRefreshInterval": "5 minutes",
+            "enablePaymentProofs": false,
+            "enableAutoExchange": false,
+            "defaultLang": "en",
+            "social": {
+              "twitter": "",
+              "facebook": "",
+              "youtube": "",
+              "discord": "",
+              "bitcointalk": "",
+              "github": "https://github.com/VerusCoin/s-nomp",
+              "odoo": ""
+            },
+            "theme": "light",
+            "primaryColor": "#1a4f91",
+            "secondaryColor": "#d4af37"
+          }
+        dest: "{{ s_nomp_path }}/website.json"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: website_written
+
+    - name: Display website.json status
+      ansible.builtin.debug:
+        msg: "website.json written to {{ s_nomp_path }}/website.json"
+
+    # ── 5. Write Dockerfile ─────────────────────────────────────────────────────
+    # Multi-stage: builder (node:20-alpine + deps) → runtime (node:20-alpine)
+    - name: Write Dockerfile
+      ansible.builtin.copy:
+        content: |
+          # Stage 1: Build dependencies and native modules
+          FROM node:20-alpine AS builder
+          WORKDIR /build
+
+          # Install build tools for native modules
+          RUN apk add --no-cache \
+              python3 \
+              make \
+              g++ \
+              git
+
+          # Copy package files
+          COPY package.json package-lock.json* ./
+
+          # Install all deps (including native)
+          RUN npm install
+
+          # Copy source
+          COPY . .
+
+          # Stage 2: Runtime
+          FROM node:20-alpine
+          WORKDIR /app
+
+          # Install runtime deps + curl for healthcheck
+          RUN apk add --no-cache \
+              bind-tools \
+              curl \
+              && rm -rf /var/cache/apk/*
+
+          # Copy built node_modules and source from builder
+          COPY --from=builder /build/node_modules /app/node_modules
+          COPY --from=builder /build/package.json /app/package.json
+          COPY --from=builder /build/config.json /app/config.json
+          COPY --from=builder /build/website.json /app/website.json
+          COPY --from=builder /build/init.js /app/init.js
+          COPY --from=builder /build/pool.js /app/pool.js
+          COPY --from=builder /build/libs/ /app/libs/
+          COPY --from=builder /build/scripts/ /app/scripts/
+          COPY --from=builder /build/public/ /app/public/
+          COPY --from=builder /build/views/ /app/views/
+          COPY --from=builder /build/middleware/ /app/middleware/
+          COPY --from=builder /build/cli/ /app/cli/
+
+          # Expose ports
+          EXPOSE {{ website_port }} {{ stratum_internal_port }} {{ stratum_external_port }}
+
+          HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+            CMD node /app/scripts/gotStats.js || exit 0
+
+          CMD ["node", "init.js"]
+        dest: "{{ s_nomp_path }}/Dockerfile"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: dockerfile_written
+
+    - name: Display Dockerfile status
+      ansible.builtin.debug:
+        msg: "Dockerfile written to {{ s_nomp_path }}/Dockerfile"
+
+    # ── 6. Summary ─────────────────────────────────────────────────────────────
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg: |
+          s-nomp configured for VRSCTEST:
+            config.json  → {{ s_nomp_path }}/config.json
+            website.json → {{ s_nomp_path }}/website.json
+            Dockerfile  → {{ s_nomp_path }}/Dockerfile
+
+          Pool settings:
+            coin          → Verus (VRSC)
+            chain         → VRSCTEST (testnet)
+            pool_address  → {{ pool_address }}
+            pool_fee      → {{ pool_fee }}%
+            daemon        → {{ daemon_host }}:{{ daemon_rpc_port }}
+            website       → internal {{ website_port }}
+            stratum-int   → {{ stratum_internal_port }}
+            stratum-ext   → {{ stratum_external_port }}
+
+          Next: ansible-playbook playbooks/51-s-nomp-build.yml

@@ -1,0 +1,76 @@
+# Playbook: 51-s-nomp-build.yml
+# Purpose: Build the s-nomp Docker image for VRSCTEST
+# Run with: ansible-playbook -i inventory.ini playbooks/51-s-nomp-build.yml
+#           Or with force rebuild: ansible-playbook -i inventory.ini playbooks/51-s-nomp-build.yml -e s_nomp_rebuild=true
+# Requires: 50b-s-nomp-configure.yml (config.json, Dockerfile must exist)
+# Idempotent: skips if buildwithdreams/s-nomp:vrsctest already exists, unless s_nomp_rebuild=true
+---
+- name: Build s-nomp Docker image for VRSCTEST
+  hosts: production
+  become: false
+  vars:
+    s_nomp_path: "/home/{{ ansible_user }}/s-nomp"
+    image_name: "buildwithdreams/s-nomp"
+    image_tag: "vrsctest"
+    rebuild: "{{ s_nomp_rebuild | default(false) | bool }}"
+
+  tasks:
+    # ── 1. Verify config.json exists ──────────────────────────────────────────
+    - name: Verify config.json exists
+      ansible.builtin.stat:
+        path: "{{ s_nomp_path }}/config.json"
+      register: config_stat
+      failed_when: not config_stat.stat.exists
+
+    # ── 2. Check if image already exists ─────────────────────────────────────
+    - name: Check for existing local image
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'exists' || echo 'missing'"
+      register: image_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Display build plan
+      ansible.builtin.debug:
+        msg: >
+          Image {{ image_name }}:{{ image_tag }} — {{ 'will be built' if (rebuild or image_exists.stdout != 'exists') else 'already exists (force rebuild disabled)' }}
+
+    # ── 3. Build Docker image ─────────────────────────────────────────────────
+    - name: Build s-nomp Docker image
+      ansible.builtin.shell:
+        cmd: "cd {{ s_nomp_path }} && docker build --no-cache -t {{ image_name }}:{{ image_tag }} -t {{ image_name }}:{{ image_tag }}-latest ."
+      register: build_result
+      when: rebuild or image_exists.stdout != 'exists'
+      failed_when: false
+
+    - name: Display build output
+      ansible.builtin.debug:
+        msg: "Build started: {{ image_name }}:{{ image_tag }}"
+      when: rebuild or image_exists.stdout != 'exists'
+
+    - name: Display full build stdout
+      ansible.builtin.debug:
+        var: build_result.stdout_lines
+      when: rebuild or image_exists.stdout != 'exists'
+      failed_when: false
+
+    # ── 4. Verify image was created ──────────────────────────────────────────
+    - name: Verify image exists after build
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'ok'"
+      register: image_verify
+      changed_when: false
+      failed_when: false
+      when: rebuild or image_exists.stdout != 'exists'
+
+    - name: Display image details
+      ansible.builtin.debug:
+        msg: "Image {{ image_name }}:{{ image_tag }} built successfully"
+      when: rebuild or image_exists.stdout != 'exists'
+
+    # ── 5. Summary ────────────────────────────────────────────────────────────
+    - name: Display build summary
+      ansible.builtin.debug:
+        msg: |
+          s-nomp image: {{ image_name }}:{{ image_tag }}
+          Next: ansible-playbook playbooks/52-s-nomp-deploy.yml -e "pool_address=RTEST..."

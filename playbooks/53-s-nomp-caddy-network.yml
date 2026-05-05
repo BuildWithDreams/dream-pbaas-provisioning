@@ -1,0 +1,70 @@
+# Playbook: 53-s-nomp-caddy-network.yml
+# Purpose: Attach the existing Caddy container to net-vrsctest so it can proxy
+#          the s-nomp web UI at pool.vrsctest.buildwithdreams.com.
+# Run with: ansible-playbook -i inventory.ini playbooks/53-s-nomp-caddy-network.yml
+# Requires: Caddy container running (from 28-caddy-deploy.yml)
+# Idempotent: safe to re-run — skips if Caddy already on net-vrsctest.
+---
+- name: Attach Caddy to net-vrsctest for s-nomp
+  hosts: production
+  become: false
+  vars:
+    caddy_container: "mains_blue_caddy-caddy-1"
+    docker_network: "net-vrsctest"
+
+  tasks:
+    # ── 1. Check if network exists ────────────────────────────────────────────
+    - name: Verify net-vrsctest network exists
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ docker_network }} > /dev/null 2>&1 && echo 'exists' || echo 'missing'"
+      register: network_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Abort if net-vrsctest does not exist
+      ansible.builtin.fail:
+        msg: "Network {{ docker_network }} does not exist. Run 03-docker-networks.yml first."
+      when: network_exists.stdout != 'exists'
+
+    # ── 2. Check if Caddy is already on net-vrsctest ──────────────────────────
+    - name: Check if Caddy is connected to net-vrsctest
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'connected' || echo 'disconnected'"
+      register: caddy_network_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display current network status
+      ansible.builtin.debug:
+        msg: "Caddy on {{ docker_network }}: {{ caddy_network_status.stdout }}"
+
+    # ── 3. Attach Caddy to net-vrsctest ──────────────────────────────────────
+    - name: Attach Caddy to net-vrsctest
+      ansible.builtin.shell:
+        cmd: "docker network connect {{ docker_network }} {{ caddy_container }}"
+      register: network_connect
+      failed_when: false
+      changed_when: true
+      when: caddy_network_status.stdout != 'connected'
+
+    - name: Display attach result
+      ansible.builtin.debug:
+        msg: "Caddy attached to {{ docker_network }}"
+      when: caddy_network_status.stdout != 'connected'
+
+    - name: Display skip result
+      ansible.builtin.debug:
+        msg: "Caddy already on {{ docker_network }} — nothing to do"
+      when: caddy_network_status.stdout == 'connected'
+
+    # ── 4. Verify ─────────────────────────────────────────────────────────────
+    - name: Verify Caddy is now on net-vrsctest
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'not found'"
+      register: verify_connect
+      changed_when: false
+      failed_when: false
+
+    - name: Display verification
+      ansible.builtin.debug:
+        msg: "Caddy is now routable from net-vrsctest at {{ docker_network }}"

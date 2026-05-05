@@ -1,0 +1,144 @@
+# Playbook: 52-s-nomp-deploy.yml
+# Purpose: Deploy the s-nomp mining pool container on net-vrsctest at 10.200.0.15.
+#          Exposes stratum ports on the host for external miner connections.
+# Run with: ansible-playbook -i inventory.ini playbooks/52-s-nomp-deploy.yml
+#           -e "pool_address=RTEST..."
+# Requires: 51-s-nomp-build.yml (image must exist)
+# Idempotent: safe to re-run — stops old container before starting fresh.
+---
+- name: Deploy s-nomp mining pool for VRSCTEST
+  hosts: production
+  become: false
+  vars:
+    s_nomp_path: "/home/{{ ansible_user }}/s-nomp"
+    compose_project: "dev200_snomp"
+    container_name: "dev200_snomp-snomp-1"
+    docker_network: "net-vrsctest"
+    snomp_bind_ip: "10.200.0.15"
+
+    # Internal service ports (inside container)
+    website_port: "3000"
+    stratum_internal_port: "3333"
+    stratum_external_port: "3334"
+
+    # Host ports exposed for external miner access
+    # stratum_internal → localhost only (local miners)
+    # stratum_external → 0.0.0.0 (internet-facing workers)
+    stratum_internal_host_port: "3333"
+    stratum_external_host_port: "3334"
+
+    image_name: "buildwithdreams/s-nomp"
+    image_tag: "vrsctest"
+
+  tasks:
+    # ── 0. Require pool_address ───────────────────────────────────────────────
+    - name: Require pool_address parameter
+      ansible.builtin.assert:
+        that:
+          - pool_address is defined
+          - pool_address | length > 0
+        fail_msg: "pool_address must be provided via -e \"pool_address=RTEST...\""
+        success_msg: "pool_address validated"
+
+    # ── 1. Verify image exists ────────────────────────────────────────────────
+    - name: Verify image is built
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'ok' || echo 'missing'"
+      register: image_check
+      changed_when: false
+      failed_when: image_check.stdout != 'ok'
+
+    # ── 2. Stop and remove existing container ─────────────────────────────────
+    - name: Remove old container if it exists
+      ansible.builtin.shell:
+        cmd: "docker rm -f {{ container_name }} 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 3. Write docker-compose.yml ────────────────────────────────────────────
+    - name: Create docker-compose.yml
+      ansible.builtin.copy:
+        content: |
+          # docker-compose.yml — s-nomp Mining Pool (VRSCTEST)
+          # Image: {{ image_name }}:{{ image_tag }}
+          version: "3.9"
+
+          services:
+            s-nomp:
+              image: {{ image_name }}:{{ image_tag }}
+              container_name: {{ container_name }}
+              hostname: vrsctest-s-nomp
+              ports:
+                # Internal stratum — localhost only (for local testing)
+                - "127.0.0.1:{{ stratum_internal_host_port }}:{{ stratum_internal_port }}"
+                # External stratum — internet-facing (for remote workers)
+                - "0.0.0.0:{{ stratum_external_host_port }}:{{ stratum_external_port }}"
+              networks:
+                pbaas_network:
+                  ipv4_address: {{ snomp_bind_ip }}
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "wget", "-qO-", "http://localhost:{{ website_port }}/"]
+                interval: "30s"
+                timeout: "10s"
+                retries: 3
+                start_period: "30s"
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+
+          networks:
+            pbaas_network:
+              name: {{ docker_network }}
+              external: true
+        dest: "{{ s_nomp_path }}/docker-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: compose_written
+
+    - name: Display compose file path
+      ansible.builtin.debug:
+        msg: "docker-compose.yml written to {{ s_nomp_path }}/docker-compose.yml"
+
+    # ── 4. Deploy with docker compose ─────────────────────────────────────────
+    - name: Start s-nomp container
+      ansible.builtin.shell:
+        cmd: "timeout 120 docker compose -f {{ s_nomp_path }}/docker-compose.yml -p {{ compose_project }} up -d --force-recreate"
+      register: compose_up
+      changed_when: true
+
+    - name: Display deploy result
+      ansible.builtin.debug:
+        msg: "Container {{ container_name }} started: {{ compose_up.stdout_lines | join(' ') }}"
+
+    # ── 5. Wait for container to be running ───────────────────────────────────
+    - name: Verify container is running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ container_name }}' | head -1 || true"
+      register: running_verify
+      changed_when: false
+      retries: 15
+      delay: 4
+      until: running_verify.stdout | length > 0
+      failed_when: false
+
+    # ── 6. Summary ────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          s-nomp mining pool deployed (VRSCTEST):
+            container    → {{ container_name }}
+            image        → {{ image_name }}:{{ image_tag }}
+            network      → {{ docker_network }}
+            IP           → {{ snomp_bind_ip }}
+            website      → {{ snomp_bind_ip }}:{{ website_port }} (internal only)
+            stratum-int  → 127.0.0.1:{{ stratum_internal_host_port }}
+            stratum-ext  → 0.0.0.0:{{ stratum_external_host_port }} (internet)
+            Miner URL    → stratum+tcp://<server-ip>:3334
+
+          Verify:
+            ssh <host> "docker ps | grep snomp"
+            ssh <host> "ss -tlnp | grep -E '3333|3334'"

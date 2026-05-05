@@ -1,0 +1,49 @@
+# Playbook: 50-s-nomp-clone.yml
+# Purpose: Clone VerusCoin/s-nomp mining pool software to BWD
+# Run with: ansible-playbook -i inventory.ini playbooks/50-s-nomp-clone.yml
+# Idempotent: safe to re-run — does a git fetch + reset to target branch.
+---
+- name: Clone s-nomp mining pool
+  hosts: production
+  become: false
+  vars:
+    s_nomp_repo: "https://github.com/VerusCoin/s-nomp.git"
+    s_nomp_dest: "/home/{{ ansible_user }}/s-nomp"
+    s_nomp_branch: "master"
+
+  tasks:
+    # ── 1. Ensure parent directory exists ──────────────────────────────────────
+    - name: Ensure home directory exists
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}"
+        state: directory
+        mode: '0755'
+
+    # ── 2. Reset existing clone to target branch ────────────────────────────────
+    - name: Reset existing clone to target branch
+      ansible.builtin.shell:
+        cmd: "git -C {{ s_nomp_dest }} fetch origin && git -C {{ s_nomp_dest }} reset --hard origin/{{ s_nomp_branch }} 2>&1"
+      register: repo_reset
+      changed_when: true
+      failed_when: false
+      when: ansible_user != 'root'
+
+    # ── 3. Clone or update repository ──────────────────────────────────────────
+    - name: Clone s-nomp repository
+      ansible.builtin.git:
+        repo: "{{ s_nomp_repo }}"
+        dest: "{{ s_nomp_dest }}"
+        clone: true
+        update: true
+        accept_hostkey: true
+        version: "{{ s_nomp_branch }}"
+        force: true
+      register: clone_result
+
+    # ── 4. Display result ────────────────────────────────────────────────────────
+    - name: Display clone status
+      ansible.builtin.debug:
+        msg: |
+          s-nomp cloned to: {{ s_nomp_dest }}
+          branch: {{ s_nomp_branch }}
+          origin: {{ s_nomp_repo }}
