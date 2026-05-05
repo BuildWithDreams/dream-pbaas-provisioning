@@ -69,7 +69,7 @@
       register: daemon_rpcpass
       changed_when: false
       failed_when: false
-      when: vrsctest_conf_stat.exists
+      when: vrsctest_conf_stat.stat.exists
 
     - name: Fail if vrsctest.conf not found
       ansible.builtin.fail:
