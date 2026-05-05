@@ -55,6 +55,19 @@
       changed_when: true
       failed_when: false
 
+    # ── 2b. Fix Redis host in configs (use Docker service name) ─────────────────
+    # The configure playbook wrote the external Redis IP. Inside the compose
+    # stack, s-nomp reaches Redis via the Docker service name "redis".
+    - name: Update redis host to docker service name in config.json
+      ansible.builtin.shell:
+        cmd: "sed -i 's/\"host\": \"35.204.185.83\"/\"host\": \"redis\"/g' {{ s_nomp_path }}/config.json"
+      changed_when: true
+
+    - name: Update redis host to docker service name in pool config
+      ansible.builtin.shell:
+        cmd: "sed -i 's/\"host\": \"35.204.185.83\"/\"host\": \"redis\"/g' {{ s_nomp_path }}/pool_configs/verustest.json"
+      changed_when: true
+
     # ── 3. Write docker-compose.yml ────────────────────────────────────────────
     - name: Create docker-compose.yml
       ansible.builtin.copy:
@@ -64,10 +77,29 @@
           version: "3.9"
 
           services:
+            redis:
+              image: redis:7-alpine
+              container_name: {{ compose_project }}-redis-1
+              hostname: redis
+              ports:
+                # Expose to host for debugging/backup tools
+                - "127.0.0.1:6380:6379"
+              networks:
+                pbaas_network:
+              restart: unless-stopped
+              logging:
+                driver: json-file
+                options:
+                  max-size: "10m"
+                  max-file: "3"
+
             s-nomp:
               image: {{ image_name }}:{{ image_tag }}
               container_name: {{ container_name }}
               hostname: vrsctest-s-nomp
+              depends_on:
+                redis:
+                  condition: service_healthy
               ports:
                 # Internal stratum — localhost only (for local testing)
                 - "127.0.0.1:{{ stratum_internal_host_port }}:{{ stratum_internal_port }}"
