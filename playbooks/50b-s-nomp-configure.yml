@@ -277,44 +277,42 @@
         msg: "pool_configs/verustest.json written to {{ s_nomp_path }}/pool_configs/verustest.json"
 
     # ── 6. Write Dockerfile ────────────────────────────────────────────────────
-    # Multi-stage: builder (npm install) → runtime (node:20-alpine)
+    # Multi-stage: host has pre-installed node_modules (SSH credentials).
+    # Dockerfile copies them directly — no npm install inside Docker.
     - name: Write Dockerfile
       ansible.builtin.copy:
         content: |
-          # Stage 1: Install dependencies
-          FROM node:20-alpine AS builder
-          WORKDIR /build
+          # Stage 1: Copy pre-installed node_modules from host build context.
+          # npm install was run on the host where GitHub SSH credentials are available.
+          # This stage just packages everything for the runtime image.
+          FROM node:20-alpine AS deps
+          WORKDIR /deps
 
-          RUN apk add --no-cache \
-              python3 \
-              make \
-              g++ \
-              git
-
-          COPY package.json package-lock.json* ./
-          RUN npm install --production
+          # Install runtime libs needed for native modules
+          RUN apk add --no-cache bind-tools curl libsodium-dev && rm -rf /var/cache/apk/*
 
           COPY . .
 
-          # Stage 2: Runtime
+          # Stage 2: Minimal runtime
           FROM node:20-alpine
           WORKDIR /app
 
-          RUN apk add --no-cache bind-tools curl && rm -rf /var/cache/apk/*
+          RUN apk add --no-cache bind-tools curl libsodium-dev && rm -rf /var/cache/apk/*
 
-          COPY --from=builder /build/node_modules /app/node_modules
-          COPY --from=builder /build/package.json /app/package.json
-          COPY --from=builder /build/config.json /app/config.json
-          COPY --from=builder /build/website.json /app/website.json
-          COPY --from=builder /build/init.js /app/init.js
-          COPY --from=builder /build/libs/ /app/libs/
-          COPY --from=builder /build/scripts/ /app/scripts/
-          COPY --from=builder /build/public/ /app/public/
-          COPY --from=builder /build/views/ /app/views/
-          COPY --from=builder /build/middleware/ /app/middleware/
-          COPY --from=builder /build/cli/ /app/cli/
-          COPY --from=builder /build/pool_configs/ /app/pool_configs/
-          COPY --from=builder /build/coins/ /app/coins/
+          COPY --from=deps /deps/node_modules /app/node_modules
+          COPY --from=deps /deps/package.json /app/package.json
+          COPY --from=deps /deps/package-lock.json* /app/package-lock.json*
+          COPY --from=deps /deps/config.json /app/config.json
+          COPY --from=deps /deps/website.json /app/website.json
+          COPY --from=deps /deps/init.js /app/init.js
+          COPY --from=deps /deps/libs/ /app/libs/
+          COPY --from=deps /deps/scripts/ /app/scripts/
+          COPY --from=deps /deps/public/ /app/public/
+          COPY --from=deps /deps/views/ /app/views/
+          COPY --from=deps /deps/middleware/ /app/middleware/
+          COPY --from=deps /deps/cli/ /app/cli/
+          COPY --from=deps /deps/pool_configs/ /app/pool_configs/
+          COPY --from=deps /deps/coins/ /app/coins/
 
           EXPOSE {{ website_port }}
 

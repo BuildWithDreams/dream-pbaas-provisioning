@@ -22,7 +22,31 @@
       register: config_stat
       failed_when: not config_stat.stat.exists
 
-    # ── 2. Check if image already exists ─────────────────────────────────────
+    # ── 3. Install npm deps on host (SSH available for git+https:// GitHub deps) ─
+    # Some transitive deps (bitgo-utxo-lib → blake2b-wasm, equihashverify) use
+    # git+ssh:// URLs that require GitHub credentials. The host has these via SSH agent;
+    # the Docker builder does not. So we install on host first.
+    - name: Check if node_modules already installed on host
+      ansible.builtin.stat:
+        path: "{{ s_nomp_path }}/node_modules"
+      register: node_modules_stat
+
+    - name: Display npm install plan
+      ansible.builtin.debug:
+        msg: "npm install: {{ 'skipping — node_modules present' if node_modules_stat.stat.exists else 'installing on host (SSH credentials available)' }}"
+
+    - name: Install npm dependencies on host
+      ansible.builtin.shell:
+        cmd: "cd {{ s_nomp_path }} && npm install --production 2>&1"
+      register: npm_install
+      when: not node_modules_stat.stat.exists
+
+    - name: Display npm install result
+      ansible.builtin.debug:
+        msg: "npm install completed"
+      when: not node_modules_stat.stat.exists
+
+    # ── 4. Check if image already exists ─────────────────────────────────────
     - name: Check for existing local image
       ansible.builtin.shell:
         cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'exists' || echo 'missing'"
@@ -35,7 +59,7 @@
         msg: >
           Image {{ image_name }}:{{ image_tag }} — {{ 'will be built' if (rebuild or image_exists.stdout != 'exists') else 'already exists (force rebuild disabled)' }}
 
-    # ── 3. Build Docker image ─────────────────────────────────────────────────
+    # ── 5. Build Docker image ─────────────────────────────────────────────────
     - name: Build s-nomp Docker image
       ansible.builtin.shell:
         cmd: "cd {{ s_nomp_path }} && docker build --no-cache -t {{ image_name }}:{{ image_tag }} -t {{ image_name }}:{{ image_tag }}-latest ."
