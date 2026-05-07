@@ -21,7 +21,7 @@
     # ── 0. Pre-flight: verify Caddy is on net-vdex-blue ────────────────────────
     - name: Verify Caddy is connected to net-vdex-blue (pre-flight)
       ansible.builtin.shell:
-        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'missing'"
+        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' 2>/dev/null | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'missing'"
       register: caddy_network_preflight
       changed_when: false
       failed_when: caddy_network_preflight.stdout != 'ok'

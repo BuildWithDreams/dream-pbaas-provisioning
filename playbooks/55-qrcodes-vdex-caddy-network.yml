@@ -19,15 +19,15 @@
     # ── 1. Verify Caddy is running ──────────────────────────────────────────────
     - name: Verify Caddy container is running
       ansible.builtin.shell:
-        cmd: "docker ps --filter 'name={{ caddy_container }}' --format 'name' 2>/dev/null"
+        cmd: "docker ps 2>/dev/null | grep 'mains_blue_caddy-caddy-1' | head -1"
       register: caddy_running
       changed_when: false
-      failed_when: caddy_running.stdout != caddy_container
+      failed_when: caddy_running.stdout | length == 0
 
     # ── 2. Check if already connected ───────────────────────────────────────────
     - name: Check if already connected to net-vdex-blue
       ansible.builtin.shell:
-        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'connected' || echo 'not_connected'"
+        cmd: "docker network inspect {{ docker_network }} 2>/dev/null | grep -q '{{ caddy_container }}' && echo 'connected' || echo 'not_connected'"
       register: net_check
       changed_when: false
       failed_when: false
@@ -58,7 +58,7 @@
     # ── 4. Verify connection ───────────────────────────────────────────────────
     - name: Verify Caddy is now on net-vdex-blue
       ansible.builtin.shell:
-        cmd: "docker network inspect net-vdex-blue --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'verified' || echo 'failed'"
+        cmd: "docker network inspect {{ docker_network }} 2>/dev/null | grep -q '{{ caddy_container }}' && echo 'verified' || echo 'failed'"
       register: verify_check
       changed_when: false
       failed_when: false
