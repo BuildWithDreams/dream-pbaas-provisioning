@@ -1,0 +1,82 @@
+# Playbook: 55-qrcodes-vdex-caddy-network.yml
+# Purpose: Connect the existing Caddy container to net-vdex-blue so it can proxy
+#          qrcodes.vdex.buildwithdreams.com from inside that network.
+#          Caddy is already on net-vrsc-blue (10.201.0.10). After this playbook
+#          it will be on both networks simultaneously.
+# Run with: ansible-playbook -i inventory.ini playbooks/55-qrcodes-vdex-caddy-network.yml
+# Requires: Caddy container running (28-caddy-deploy.yml complete)
+# Idempotent: safe to re-run — skips if already connected.
+# Next: run 56-qrcodes-vdex-caddy-route.yml
+---
+- name: Connect Caddy to net-vdex-blue
+  hosts: production
+  become: false
+  vars:
+    caddy_container: "mains_blue_caddy-caddy-1"
+    docker_network: "net-vdex-blue"
+
+  tasks:
+    # ── 1. Verify Caddy is running ──────────────────────────────────────────────
+    - name: Verify Caddy container is running
+      ansible.builtin.shell:
+        cmd: "docker ps --filter 'name={{ caddy_container }}' --format 'name' 2>/dev/null"
+      register: caddy_running
+      changed_when: false
+      failed_when: caddy_running.stdout != caddy_container
+
+    # ── 2. Check if already connected ───────────────────────────────────────────
+    - name: Check if already connected to net-vdex-blue
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'connected' || echo 'not_connected'"
+      register: net_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display current state
+      ansible.builtin.debug:
+        msg: "Caddy {{ 'already on net-vdex-blue' if net_check.stdout == 'connected' else 'will be connected to net-vdex-blue' }}"
+
+    # ── 3. Connect to net-vdex-blue ──────────────────────────────────────────
+    - name: Connect Caddy to net-vdex-blue
+      ansible.builtin.shell:
+        cmd: "docker network connect net-vdex-blue {{ caddy_container }} 2>&1"
+      register: connect_result
+      changed_when: true
+      failed_when: false
+      when: net_check.stdout != 'connected'
+
+    - name: Detect if already connected (safe to ignore)
+      ansible.builtin.set_fact:
+        connect_ignored: "{{ 'already exists' in connect_result.stderr }}"
+      when: net_check.stdout != 'connected'
+
+    - name: Display connect result
+      ansible.builtin.debug:
+        msg: "Caddy {{ 'already on net-vdex-blue (previous run)' if connect_ignored | default(false) else 'connected to net-vdex-blue' }}"
+      when: net_check.stdout != 'connected'
+
+    # ── 4. Verify connection ───────────────────────────────────────────────────
+    - name: Verify Caddy is now on net-vdex-blue
+      ansible.builtin.shell:
+        cmd: "docker network inspect net-vdex-blue --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'verified' || echo 'failed'"
+      register: verify_check
+      changed_when: false
+      failed_when: false
+
+    # ── 5. Summary ────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          Caddy is now multi-homed:
+            container  → {{ caddy_container }}
+            networks   → net-vrsc-blue (10.201.0.10), net-vdex-blue
+            IP on vrsc-blue  → 10.201.0.10 (existing)
+            IP on vdex-blue  → automatic (Docker-assigned)
+
+          This allows Caddy to proxy:
+            qrcodes.vdex.buildwithdreams.com → 10.203.0.13:3000 (vDEX network)
+
+          Verify:
+            ansible -i inventory.ini -m shell -a "docker network inspect net-vdex-blue" 135.181.136.105
+
+          Next: run 56-qrcodes-vdex-caddy-route.yml

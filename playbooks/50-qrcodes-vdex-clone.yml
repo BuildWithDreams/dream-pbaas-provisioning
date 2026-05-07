@@ -1,0 +1,80 @@
+# Playbook: 50-qrcodes-vdex-clone.yml
+# Purpose: Ensure verus-identity-update-qr-creator-main is present for vDEX on target host.
+#          Clone destination is separate from the VRSCTEST working copy so each chain
+#          retains its own config.js and Docker image.
+# Run with: ansible-playbook -i inventory.ini playbooks/50-qrcodes-vdex-clone.yml
+# Idempotent: safe to re-run — skips if target already exists.
+# Next: run 51-fetch-vdex-signer-wif.yml then 52-qrcodes-vdex-configure.yml
+---
+- name: Clone QRcodes repository for vDEX
+  hosts: production
+  become: false
+  vars:
+    qr_repo_url: "https://github.com/BuildWithDreams/verus-identity-update-qr-creator-main.git"
+    qr_repo_dest: "verus-identity-update-qr-creator-vdex"
+    qr_path: "/home/{{ ansible_user }}/{{ qr_repo_dest }}"
+    qr_path_vrsctest: "/home/{{ ansible_user }}/verus-identity-update-qr-creator-main"
+
+  tasks:
+    # ── 1. Check if vDEX target already exists ──────────────────────────────────
+    - name: Check if vDEX target directory already exists
+      ansible.builtin.stat:
+        path: "{{ qr_path }}"
+      register: qr_dir_stat
+
+    # ── 2. Check for existing VRSCTEST clone (same source, can copy) ────────────
+    - name: Check for existing VRSCTEST clone (same source repo)
+      ansible.builtin.stat:
+        path: "{{ qr_path_vrsctest }}"
+      register: vrsctest_dir_stat
+
+    - name: Display clone plan
+      ansible.builtin.debug:
+        msg: |
+          Target: {{ qr_path }}
+          {{ 'Already present — nothing to do.' if qr_dir_stat.stat.exists else (
+              'VRSCTEST clone found at ' + qr_path_vrsctest + ' — will copy to target.'
+            ) if vrsctest_dir_stat.stat.exists else
+            ('Will git clone from ' + qr_repo_url) }}
+
+    # ── 3a. Skip if target already exists ───────────────────────────────────────
+    - name: Report target already present
+      ansible.builtin.set_fact:
+        clone_action: "skip"
+      when: qr_dir_stat.stat.exists
+
+    # ── 3b. Copy from existing VRSCTEST clone ────────────────────────────────
+    - name: Copy existing VRSCTEST clone to vDEX target path
+      ansible.builtin.shell:
+        cmd: "cp -a {{ qr_path_vrsctest }} {{ qr_path }}"
+      register: copy_result
+      changed_when: true
+      when: not qr_dir_stat.stat.exists and vrsctest_dir_stat.stat.exists
+
+    - name: Report copy result
+      ansible.builtin.set_fact:
+        clone_action: "copied"
+      when: not qr_dir_stat.stat.exists and vrsctest_dir_stat.stat.exists
+
+    # ── 3c. Git clone as last resort ───────────────────────────────────────────
+    - name: Clone repository from GitHub
+      ansible.builtin.shell:
+        cmd: "git clone --depth=1 {{ qr_repo_url }} {{ qr_path }} 2>&1"
+      register: clone_result
+      changed_when: true
+      when: not qr_dir_stat.stat.exists and not vrsctest_dir_stat.stat.exists
+
+    - name: Report clone result
+      ansible.builtin.set_fact:
+        clone_action: "cloned"
+      when: not qr_dir_stat.stat.exists and not vrsctest_dir_stat.stat.exists
+
+    # ── 4. Summary ─────────────────────────────────────────────────────────────
+    - name: Display final status
+      ansible.builtin.debug:
+        msg: |
+          QRcode repo ready at {{ qr_path }}
+          Action: {{ clone_action }}
+          {{ 'Copied from existing VRSCTEST clone — same source, faster.' if clone_action == 'copied' else '' }}
+          {{ 'Cloned fresh from GitHub.' if clone_action == 'cloned' else '' }}
+          {{ 'Already present — skipped.' if clone_action == 'skip' else '' }}

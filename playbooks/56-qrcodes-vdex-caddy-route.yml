@@ -1,0 +1,127 @@
+# Playbook: 56-qrcodes-vdex-caddy-route.yml
+# Purpose: Add qrcodes.vdex.buildwithdreams.com route to the existing Caddyfile
+#          and reload Caddy. Proxies to 10.203.0.13:3000 inside net-vdex-blue.
+# Run with: ansible-playbook -i inventory.ini playbooks/56-qrcodes-vdex-caddy-route.yml
+# Requires: 54-qrcodes-vdex-deploy.yml (container running)
+#           AND 55-qrcodes-vdex-caddy-network.yml (Caddy on net-vdex-blue)
+# Idempotent: safe to re-run — route block present on subsequent runs.
+---
+- name: Add qrcodes.vdex Caddy route
+  hosts: production
+  become: false
+  vars:
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    docker_network: "net-vdex-blue"
+    qr_bind_ip: "10.203.0.13"
+    qr_port: "3000"
+    qr_domain: "qrcodes.vdex.buildwithdreams.com"
+
+  tasks:
+    # ── 0. Pre-flight: verify Caddy is on net-vdex-blue ────────────────────────
+    - name: Verify Caddy is connected to net-vdex-blue (pre-flight)
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'missing'"
+      register: caddy_network_preflight
+      changed_when: false
+      failed_when: caddy_network_preflight.stdout != 'ok'
+
+    # ── 1. Validate Caddyfile exists ───────────────────────────────────────────
+    - name: Verify Caddyfile exists
+      ansible.builtin.stat:
+        path: "{{ caddy_path }}/Caddyfile"
+      register: caddyfile_stat
+      failed_when: not caddyfile_stat.stat.exists
+
+    # ── 2. Check if route already exists ───────────────────────────────────────
+    - name: Check if qrcodes.vdex route already in Caddyfile
+      ansible.builtin.shell:
+        cmd: "grep -q 'qrcodes.vdex.buildwithdreams.com' {{ caddy_path }}/Caddyfile && echo 'present' || echo 'absent'"
+      register: route_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display route status
+      ansible.builtin.debug:
+        msg: "qrcodes.vdex route in Caddyfile: {{ route_check.stdout }}"
+
+    # ── 3. Append route block if not present ───────────────────────────────────
+    - name: Append qrcodes.vdex route to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK — qrcodes.vdex.buildwithdreams.com"
+        content: |
+          qrcodes.vdex.buildwithdreams.com {
+            reverse_proxy {{ qr_bind_ip }}:{{ qr_port }}
+            tls hermesreport@verus.trading
+            log {
+              output file /data/access.log
+            }
+          }
+      register: caddyfile_updated
+      when: route_check.stdout == 'absent'
+
+    - name: Display Caddyfile update result
+      ansible.builtin.debug:
+        msg: "Caddyfile updated — qrcodes.vdex route block {{ 'added' if caddyfile_updated.changed else 'already present' }}"
+      when: route_check.stdout == 'absent'
+
+    # ── 4. Format Caddyfile ───────────────────────────────────────────────────
+    - name: Format Caddyfile
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy fmt --overwrite /config/caddy/Caddyfile 2>&1"
+      register: caddy_fmt
+      changed_when: true
+      when: route_check.stdout == 'absent'
+
+    # ── 5. Validate Caddyfile syntax before reload ──────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      failed_when: false
+      changed_when: false
+
+    - name: Abort if Caddyfile invalid
+      ansible.builtin.fail:
+        msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
+      when: caddy_validate.rc != 0
+
+    # ── 6. Reload Caddy ────────────────────────────────────────────────────────
+    - name: Reload Caddy to apply new route
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      failed_when: false
+      changed_when: route_check.stdout == 'absent'
+
+    - name: Display reload result
+      ansible.builtin.debug:
+        msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
+
+    # ── 7. Health check: verify upstream is reachable from Caddy ───────────────
+    - name: Health check — upstream qrcodes app
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} wget -q -O - --timeout=5 http://{{ qr_bind_ip }}:{{ qr_port }}/ 2>&1 | head -1 || echo 'unreachable'"
+      register: upstream_health
+      changed_when: false
+      failed_when: false
+      when: route_check.stdout == 'absent'
+
+    - name: Warn if upstream unreachable
+      ansible.builtin.debug:
+        msg: "WARNING: Upstream at {{ qr_bind_ip }}:{{ qr_port }} did not respond. Route is configured but app may be down."
+      when: route_check.stdout == 'absent' and upstream_health.stdout == 'unreachable'
+
+    # ── 8. Summary ─────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          QRcode creator (vDEX) Caddy route added:
+            URL      → https://{{ qr_domain }}
+            Upstream → {{ qr_bind_ip }}:{{ qr_port }}
+            TLS      → hermesreport@verus.trading (manual)
+            Route    → reverse_proxy (no path rewrite)
+
+          Verify:
+            curl -I https://{{ qr_domain }}

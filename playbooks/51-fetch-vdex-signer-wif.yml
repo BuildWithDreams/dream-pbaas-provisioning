@@ -1,0 +1,104 @@
+# Playbook: 51-fetch-vdex-signer-wif.yml
+# Purpose: Fetch the WIF private key for the BWD@ identity's primary address on vDEX.
+#          Writes to ~/.bwd_signer_wif_vdex — separate from the VRSCTEST WIF file.
+#          SERVICE_SIGNER_WIF is never stored in inventory or code.
+# Run with: ansible-playbook -i inventory.ini playbooks/51-fetch-vdex-signer-wif.yml
+#           -e identity_name=BWD@  (optional, defaults to BWD@)
+# Requires: vDEX daemon running and synced
+# Next: run 52-qrcodes-vdex-configure.yml
+---
+- name: Fetch SERVICE_SIGNER_WIF from vDEX daemon
+  hosts: production
+  become: false
+  vars:
+    identity_name: "BWD@"
+    vdex_chain: "vDEX"
+    vdex_container: "mains_blue-vdex-1"
+    # Separate WIF file from VRSCTEST so they don't clobber each other
+    signer_wif_file: "/home/{{ ansible_user }}/.bwd_signer_wif_vdex"
+
+  tasks:
+    # ── 1. Verify vDEX container is running ──────────────────────────────────────
+    - name: Verify vDEX container is running
+      ansible.builtin.shell:
+        cmd: "docker ps --filter 'name=mains_blue-vdex-1' --format 'name' 2>/dev/null"
+      register: vdex_container_check
+      failed_when: false
+
+    - name: Fail if vDEX container is not running
+      ansible.builtin.fail:
+        msg: |
+          vDEX container (mains_blue-vdex-1) is not running.
+          Start it first with: ansible-playbook -i inventory.ini playbooks/13-start-pbaas.yml -e pbaas_chain=vdex
+      when: vdex_container_check.stdout != 'mains_blue-vdex-1'
+
+    # ── 2. Get identity primaryaddress from vDEX daemon ──────────────────────────
+    - name: Get primary address from vDEX identity
+      ansible.builtin.shell: |
+        docker exec {{ vdex_container }} \
+          verus -chain={{ vdex_chain }} getidentity {{ identity_name }} 2>&1
+      register: identity_output
+      failed_when: false
+
+    - name: Fail if identity not found
+      ansible.builtin.fail:
+        msg: |
+          Identity '{{ identity_name }}' not found on chain '{{ vdex_chain }}'.
+          Check that the vDEX daemon is running and the identity exists.
+          Output: {{ identity_output.stdout }}
+      when: identity_output.rc != 0
+
+    - name: Parse primaryaddresses from getidentity JSON
+      ansible.builtin.set_fact:
+        primary_address: "{{ (identity_output.stdout | from_json).identity.primaryaddresses[0] }}"
+
+    - name: Validate primary_address extracted
+      ansible.builtin.assert:
+        that:
+          - primary_address | length > 0
+        fail_msg: "Could not extract primaryaddresses[0] from getidentity output for {{ identity_name }}"
+
+    # ── 3. Dump WIF for the primary address ─────────────────────────────────────
+    - name: Dump WIF private key for primary address
+      ansible.builtin.shell: |
+        docker exec {{ vdex_container }} \
+          verus -chain={{ vdex_chain }} dumpprivkey {{ primary_address }} 2>&1
+      register: dumpprivkey_output
+      failed_when: false
+
+    - name: Fail if dumpprivkey failed
+      ansible.builtin.fail:
+        msg: |
+          dumpprivkey failed for address {{ primary_address }} on vDEX.
+          The daemon wallet may be locked or the address not in this wallet.
+          Output: {{ dumpprivkey_output.stdout }}
+      when: dumpprivkey_output.rc != 0
+
+    - name: Set WIF fact (trim whitespace)
+      ansible.builtin.set_fact:
+        service_signer_wif: "{{ dumpprivkey_output.stdout | trim }}"
+
+    # ── 4. Write WIF to vDEX-specific temp file ────────────────────────────────
+    - name: Write WIF to vDEX temp file
+      ansible.builtin.copy:
+        content: |
+          {{ service_signer_wif }}
+        dest: "{{ signer_wif_file }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      register: wif_written
+
+    # ── 5. Summary ─────────────────────────────────────────────────────────────
+    - name: Display fetch result
+      ansible.builtin.debug:
+        msg: |
+          SERVICE_SIGNER_WIF fetched for {{ identity_name }} (vDEX):
+            identity    → {{ identity_name }}
+            r-address   → {{ primary_address }}
+            WIF file    → {{ signer_wif_file }}
+            chain       → {{ vdex_chain }}
+            container   → {{ vdex_container }}
+
+          WIF written to {{ signer_wif_file }} — never commit this file.
+          Next: run 52-qrcodes-vdex-configure.yml
