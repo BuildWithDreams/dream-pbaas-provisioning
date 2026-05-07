@@ -66,13 +66,13 @@
         msg: "Caddyfile updated — qrcodes.vdex route block {{ 'added' if caddyfile_updated.changed else 'already present' }}"
       when: route_check.stdout == 'absent'
 
-    # ── 4. Format Caddyfile ───────────────────────────────────────────────────
-    - name: Format Caddyfile
-      ansible.builtin.shell:
-        cmd: "docker exec {{ caddy_container }} caddy fmt --overwrite /config/caddy/Caddyfile 2>&1"
-      register: caddy_fmt
-      changed_when: true
-      when: route_check.stdout == 'absent'
+    # ── 4. Format Caddyfile (skipped — /config/caddy is read-only inside container)
+    # NOTE: blockinfile produces valid YAML, no formatting required. The Caddyfile
+    # is mounted from the host at /home/dream-hermes-agent/caddy/Caddyfile so
+    # edits via blockinfile on the host are immediately visible to Caddy.
+    # Skip caddy fmt since /config is read-only inside this container.
+    # If you need to format, run: caddy fmt --overwrite /home/dream-hermes-agent/caddy/Caddyfile
+    #   on the BWD host directly.
 
     # ── 5. Validate Caddyfile syntax before reload ──────────────────────────────
     - name: Validate Caddyfile syntax
