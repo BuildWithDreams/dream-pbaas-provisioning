@@ -20,10 +20,9 @@
   hosts: production
   become: false
   vars:
-    identity_name: "{{ identity_name | default('BWD@') }}"
+    identity_name_arg: "{{ identity_name | default('BWD@') }}"
     vdex_chain: "vDEX"
     vdex_container: "mains_blue-vdex-1"
-    # Separate WIF file from VRSCTEST so they don't clobber each other
     signer_wif_file: "/home/{{ ansible_user }}/.bwd_signer_wif_vdex"
 
   tasks:
@@ -45,7 +44,7 @@
     - name: Get primary address from vDEX identity (best-effort)
       ansible.builtin.shell: |
         docker exec {{ vdex_container }} \
-          verus -chain={{ vdex_chain }} getidentity {{ identity_name }} 2>&1
+          verus -chain={{ vdex_chain }} getidentity {{ identity_name_arg }} 2>&1
       register: identity_output
       failed_when: false
 
