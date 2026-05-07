@@ -60,14 +60,7 @@
         fail_msg: "Could not extract rpcuser/rpcpassword from vDEX conf"
 
     # ── 4. Read SERVICE_SIGNER_WIF from file written by playbook 51 ───────────
-    - name: Fail if signer WIF file is missing
-      ansible.builtin.fail:
-        msg: |
-          {{ signer_wif_file }} not found.
-          Run playbook 51-fetch-vdex-signer-wif.yml first to fetch the SERVICE_SIGNER_WIF.
-      when: not (ansible_user == 'root') and not (lookup('file', signer_wif_file, errors='ignore') | length > 0)
-
-    - name: Read SERVICE_SIGNER_WIF from temp file
+    - name: Read signer WIF from remote file via slurp
       ansible.builtin.slurp:
         src: "{{ signer_wif_file }}"
       register: signer_wif_b64
