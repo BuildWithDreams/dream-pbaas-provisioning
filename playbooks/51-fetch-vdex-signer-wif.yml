@@ -44,24 +44,23 @@
         docker exec {{ vdex_container }} \
           verus -chain={{ vdex_chain }} getidentity {{ identity_name_arg }} 2>&1
       register: identity_result
-      failed_when: false
       changed_when: false
+      failed_when: false
 
     # ── 3. Identity found on vDEX — dump WIF ───────────────────────────────────
-    - name: Parse primaryaddresses from getidentity JSON
-      ansible.builtin.set_fact:
-        primary_address: "{{ (identity_result.stdout | from_json).identity.primaryaddresses[0] }}"
-      when: identity_result.rc == 0
-
-    - name: Dump WIF private key for primary address
+    - name: Dump WIF private key for primary address (identity found)
       ansible.builtin.shell: |
         docker exec {{ vdex_container }} \
-          verus -chain={{ vdex_chain }} dumpprivkey {{ primary_address }} 2>&1
+          verus -chain={{ vdex_chain }} dumpprivkey \
+          $(docker exec {{ vdex_container }} verus -chain={{ vdex_chain }} \
+             getidentity {{ identity_name_arg }} 2>/dev/null | python3 -c \
+             "import sys,json; print(json.load(sys.stdin)['identity']['primaryaddresses'][0])") 2>&1
       register: wif_result
       failed_when: false
       changed_when: false
       when: identity_result.rc == 0
 
+    # ── 4. Write files based on identity lookup result ───────────────────────────
     - name: Write WIF to vDEX temp file (identity found)
       ansible.builtin.copy:
         content: "{{ wif_result.stdout | trim }}"
@@ -69,9 +68,8 @@
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: '0600'
-      when: wif_result is defined and wif_result.rc == 0
+      when: identity_result.rc == 0 and wif_result.rc | default(1) == 0
 
-    # ── 4. Identity not found on vDEX — write placeholder ──────────────────────
     - name: Write placeholder WIF (identity not on vDEX)
       ansible.builtin.copy:
         content: "NOT_REGISTERED_ON_VDEX"
@@ -86,12 +84,11 @@
       ansible.builtin.debug:
         msg: |
           SERVICE_SIGNER_WIF fetched for {{ identity_name_arg }} (vDEX):
-            r-address   → {{ primary_address }}
             WIF file    → {{ signer_wif_file }}
             chain       → {{ vdex_chain }}
             container   → {{ vdex_container }}
             Next: run 52-qrcodes-vdex-configure.yml
-      when: identity_result.rc == 0
+      when: identity_result.rc == 0 and wif_result.rc | default(1) == 0
 
     - name: Display fetch result (identity not found)
       ansible.builtin.debug:
