@@ -8,9 +8,6 @@
 # can still be deployed — the SERVICE_SIGNER signing feature will be unavailable
 # until a BWD@ identity is registered on vDEX.
 #
-# To register BWD@ on vDEX: use the idcreate service or register manually first,
-# then re-run this playbook and 52 to enable the signing feature.
-#
 # Run with: ansible-playbook -i inventory.ini playbooks/51-fetch-vdex-signer-wif.yml
 #           -e identity_name=BWD@  (optional, defaults to BWD@)
 # Requires: vDEX daemon running and synced
@@ -31,6 +28,7 @@
       ansible.builtin.shell:
         cmd: "docker ps 2>/dev/null | grep 'mains_blue-vdex-1' | head -1"
       register: vdex_container_check
+      changed_when: false
       failed_when: false
 
     - name: Fail if vDEX container is not running
@@ -40,67 +38,66 @@
           Start it first with: ansible-playbook -i inventory.ini playbooks/13-start-pbaas.yml -e pbaas_chain=vdex
       when: vdex_container_check.stdout | length == 0
 
-    # ── 2. Try to get identity primaryaddress from vDEX daemon ──────────────────
-    - name: Get primary address from vDEX identity (best-effort)
+    # ── 2. Get identity primaryaddress from vDEX daemon ──────────────────────────
+    - name: Get primary address from vDEX identity
       ansible.builtin.shell: |
         docker exec {{ vdex_container }} \
           verus -chain={{ vdex_chain }} getidentity {{ identity_name_arg }} 2>&1
-      register: identity_output
+      register: identity_result
       failed_when: false
+      changed_when: false
 
-    # ── 3a. Identity found — dump WIF ─────────────────────────────────────────
+    # ── 3. Identity found on vDEX — dump WIF ───────────────────────────────────
     - name: Parse primaryaddresses from getidentity JSON
       ansible.builtin.set_fact:
-        primary_address: "{{ (identity_output.stdout | from_json).identity.primaryaddresses[0] }}"
-      when: identity_output.rc == 0
+        primary_address: "{{ (identity_result.stdout | from_json).identity.primaryaddresses[0] }}"
+      when: identity_result.rc == 0
 
     - name: Dump WIF private key for primary address
       ansible.builtin.shell: |
         docker exec {{ vdex_container }} \
           verus -chain={{ vdex_chain }} dumpprivkey {{ primary_address }} 2>&1
-      register: dumpprivkey_output
+      register: wif_result
       failed_when: false
-      when: identity_output.rc == 0
+      changed_when: false
+      when: identity_result.rc == 0
 
-    - name: Set WIF fact from daemon
-      ansible.builtin.set_fact:
-        service_signer_wif: "{{ dumpprivkey_output.stdout | trim }}"
-      when: dumpprivkey_output.rc == 0
+    - name: Write WIF to vDEX temp file (identity found)
+      ansible.builtin.copy:
+        content: "{{ wif_result.stdout | trim }}"
+        dest: "{{ signer_wif_file }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      when: wif_result is defined and wif_result.rc == 0
 
-    # ── 3b. Identity not found — write placeholder ─────────────────────────────
+    # ── 4. Identity not found on vDEX — write placeholder ──────────────────────
     - name: Write placeholder WIF (identity not on vDEX)
       ansible.builtin.copy:
-        content: |
-          NOT_REGISTERED_ON_VDEX
+        content: "NOT_REGISTERED_ON_VDEX"
         dest: "{{ signer_wif_file }}"
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: '0600'
-      register: wif_placeholder_written
-      when: identity_output.rc != 0
-
-    # ── 4. Write WIF to vDEX-specific temp file ────────────────────────────────
-    - name: Write WIF to vDEX temp file
-      ansible.builtin.copy:
-        content: |
-          {{ service_signer_wif }}
-        dest: "{{ signer_wif_file }}"
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0600'
-      register: wif_written
-      when: identity_output.rc == 0
+      when: identity_result.rc != 0
 
     # ── 5. Summary ─────────────────────────────────────────────────────────────
-    - name: Display fetch result
+    - name: Display fetch result (identity found)
       ansible.builtin.debug:
         msg: |
-          SERVICE_SIGNER_WIF for {{ identity_name }} (vDEX):
-            identity    → {{ identity_name }}
-            r-address   → {{ primary_address | default('(not found on vDEX)') }}
+          SERVICE_SIGNER_WIF fetched for {{ identity_name_arg }} (vDEX):
+            r-address   → {{ primary_address }}
             WIF file    → {{ signer_wif_file }}
             chain       → {{ vdex_chain }}
             container   → {{ vdex_container }}
-            {{ 'WIF written successfully.' if identity_output.rc == 0 else '⚠ Identity not on vDEX — placeholder written. SERVICE_SIGNER feature disabled.' }}
+            Next: run 52-qrcodes-vdex-configure.yml
+      when: identity_result.rc == 0
 
-          {{ 'Next: run 52-qrcodes-vdex-configure.yml' if identity_output.rc == 0 else 'Next: run 52-qrcodes-vdex-configure.yml (signing feature will be unavailable until BWD@ is registered on vDEX)' }}
+    - name: Display fetch result (identity not found)
+      ansible.builtin.debug:
+        msg: |
+          ⚠ Identity '{{ identity_name_arg }}' not found on vDEX.
+          Placeholder WIF written — SERVICE_SIGNER feature will be unavailable.
+          To enable: register BWD@ on vDEX first, then re-run 51 and 52.
+          Next: run 52-qrcodes-vdex-configure.yml (signing disabled)
+      when: identity_result.rc != 0
