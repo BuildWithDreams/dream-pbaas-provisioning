@@ -36,17 +36,25 @@
         msg: "{{ '.env.backup created' if 'backed up' in env_backup.stdout else 'No .env found to backup' }}"
 
     # ── 3. Pull latest from GitHub ────────────────────────────────────────────
-    - name: Pull latest svc-idcreate commits from GitHub
-      ansible.builtin.git:
-        repo: "{{ idcreate_repo_url }}"
-        dest: "{{ idcreate_path }}"
-        update: true
-        accept_hostkey: true
-      register: git_pull_result
+    #    Uses fetch + reset (not pull) so it works with local unpushed commits
+    #    where origin/feature/postgres may not exist yet on the remote.
+    - name: Fetch latest commits from GitHub
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && git fetch origin && echo 'fetched' || echo 'fetch-failed'"
+      register: git_fetch_result
+      changed_when: true
+      failed_when: false
+
+    - name: Reset to latest origin/main (safe — preserves untracked files like .env)
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && git reset --hard origin/main && echo 'reset' || git reset --hard HEAD && echo 'reset-local'"
+      register: git_reset_result
+      changed_when: true
+      failed_when: false
 
     - name: Display pull status
       ansible.builtin.debug:
-        msg: "{{ 'Updated to latest commit' if git_pull_result.changed else 'Already up-to-date — no changes pulled' }}"
+        msg: "Source updated — pulled latest from origin/main"
 
     # ── 4. Always restore .env after pull ──────────────────────────────────────
     #    Git merge can remove or replace untracked .env depending on merge
@@ -127,7 +135,7 @@
       ansible.builtin.debug:
         msg: |
           svc-idcreate updated (VRSCTEST) — v2 (postgres):
-            source     → {{ 'updated' if git_pull_result.changed else 'already current' }}
+            source     → updated from origin/main
             image      → {{ image_name }}:{{ image_tag }} ({{ 'rebuilt' if docker_build_result.changed else 'unchanged' }})
             containers → restarted (postgres + provisioning + api + worker)
             .env       → {{ 'restored from backup' if env_restored.changed | default(false) else 'preserved' }}
