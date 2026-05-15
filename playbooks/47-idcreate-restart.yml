@@ -4,6 +4,7 @@
 #          docker compose restart does NOT re-read .env — use up --force-recreate.
 # Run with: ansible-playbook -i inventory.ini playbooks/47-idcreate-restart.yml
 # Idempotent: safe to re-run.
+# Changes:   v2 — removes broken container-count health check; uses api health endpoint.
 ---
 - name: Restart svc-idcreate to pick up new .env
   hosts: production
@@ -11,6 +12,8 @@
   vars:
     idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
     compose_project: "dev200_idcreate"
+    idcreate_bind_ip: "10.200.0.14"
+    idcreate_api_port: "5003"
 
   tasks:
     - name: Restart containers with force-recreate to pick up .env changes
@@ -19,26 +22,36 @@
       register: compose_restart
       changed_when: true
 
-    - name: Wait for containers to be healthy
+    # ── Wait for postgres to be healthy ─────────────────────────────────────────
+    - name: Wait for postgres to be healthy
       ansible.builtin.shell:
-        cmd: "docker ps --format name | grep -E '{{ compose_project }}-(api|worker)-1' | wc -l | tr -d ' '"
-      register: container_check
+        cmd: "docker ps 2>&1 | grep '{{ compose_project }}-postgres-1' | grep -v 'Up' | wc -l | tr -d ' '"
+      register: pg_check
       changed_when: false
-      retries: 10
-      delay: 3
-      until: container_check.stdout | int >= 2
+      retries: 15
+      delay: 10
+      until: pg_check.stdout | int == 0
       failed_when: false
 
-    - name: Verify API is responding
+    - name: Log postgres health wait result
+      ansible.builtin.debug:
+        msg: "PostgreSQL container is healthy"
+      when: pg_check.stdout | int == 0
+
+    # ── Wait for API to respond to health check ─────────────────────────────────
+    - name: Wait for API health endpoint to respond
       ansible.builtin.shell:
-        cmd: "curl -s --max-time 8 http://10.200.0.14:5003/health"
+        cmd: "curl -s --max-time 8 http://{{ idcreate_bind_ip }}:{{ idcreate_api_port }}/health 2>&1 | head -1 || echo 'not_ready'"
       register: health_check
       changed_when: false
+      retries: 20
+      delay: 5
+      until: "'not_ready' not in health_check.stdout and health_check.stdout | length > 0"
       failed_when: false
 
     - name: Display restart summary
       ansible.builtin.debug:
         msg: |
           svc-idcreate restarted:
-            containers → {{ compose_project }}-api-1, {{ compose_project }}-worker-1
+            containers → {{ compose_project }}-postgres-1, {{ compose_project }}-provisioning-1, {{ compose_project }}-api-1, {{ compose_project }}-worker-1
             api health → {{ health_check.stdout }}

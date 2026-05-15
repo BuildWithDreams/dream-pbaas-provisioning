@@ -3,6 +3,7 @@
 #          and restart the stack on net-vrsctest.
 # Run with: ansible-playbook -i inventory.ini playbooks/45-idcreate-update.yml
 # Idempotent: safe to re-run. Image is always rebuilt. .env is preserved.
+# Changes:   v2 — now waits for postgres health; docker-compose.yml updated in-place.
 ---
 - name: Update svc-idcreate (pull + rebuild + restart)
   hosts: production
@@ -22,7 +23,7 @@
       register: idcreate_dir_stat
       failed_when: not idcreate_dir_stat.stat.exists
 
-    # ── 2. Backup .env before any operation ──────────────────────────────────
+    # ── 2. Backup .env before any operation ───────────────────────────────────
     - name: Backup existing .env
       ansible.builtin.shell:
         cmd: "cp {{ idcreate_path }}/.env {{ idcreate_path }}/.env.backup 2>/dev/null && echo 'backed up' || echo 'no .env to backup'"
@@ -47,7 +48,7 @@
       ansible.builtin.debug:
         msg: "{{ 'Updated to latest commit' if git_pull_result.changed else 'Already up-to-date — no changes pulled' }}"
 
-    # ── 4. Always restore .env after pull ────────────────────────────────────
+    # ── 4. Always restore .env after pull ──────────────────────────────────────
     #    Git merge can remove or replace untracked .env depending on merge
     #    strategy. Restoring unconditionally is safer than checking existence.
     - name: Restore .env from backup after pull
@@ -62,14 +63,14 @@
         msg: ".env restored from .env.backup (git merge may have removed or replaced it)"
       when: env_restored.changed | default(false)
 
-    # ── 5. Stop running containers ───────────────────────────────────────────
+    # ── 5. Stop running containers ────────────────────────────────────────────
     - name: Stop running containers before rebuild
       ansible.builtin.shell:
         cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} down 2>/dev/null || true"
       changed_when: true
       failed_when: false
 
-    # ── 6. Rebuild Docker image ──────────────────────────────────────────────
+    # ── 6. Rebuild Docker image ────────────────────────────────────────────────
     - name: Build Docker image from latest code
       ansible.builtin.shell:
         cmd: "cd {{ idcreate_path }} && docker build -t {{ image_name }}:{{ image_tag }} ."
@@ -87,14 +88,30 @@
       ansible.builtin.debug:
         msg: "{{ 'Image rebuilt successfully' if docker_build_result.changed else 'Image already current' }}"
 
-    # ── 7. Start containers with new image ───────────────────────────────────
+    # ── 7. Start containers with new image ─────────────────────────────────────
     - name: Start svc-idcreate containers
       ansible.builtin.shell:
         cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} up -d --force-recreate"
       register: compose_up
       changed_when: true
 
-    # ── 8. Wait for api container to be running ──────────────────────────────
+    # ── 8. Wait for postgres to be healthy ─────────────────────────────────────
+    - name: Wait for postgres container to be healthy
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ compose_project }}-postgres-1' | grep -v 'Up' | wc -l | tr -d ' '"
+      register: pg_check
+      changed_when: false
+      retries: 15
+      delay: 10
+      until: pg_check.stdout | int == 0
+      failed_when: false
+
+    - name: Log postgres health wait result
+      ansible.builtin.debug:
+        msg: "PostgreSQL container is healthy"
+      when: pg_check.stdout | int == 0
+
+    # ── 9. Wait for api container to be running ───────────────────────────────
     - name: Verify api container is running
       ansible.builtin.shell:
         cmd: "docker ps 2>&1 | grep '{{ compose_project }}-api-1' | head -1 || true"
@@ -105,14 +122,14 @@
       until: api_running.stdout | length > 0
       failed_when: false
 
-    # ── 9. Summary ───────────────────────────────────────────────────────────
+    # ── 10. Summary ────────────────────────────────────────────────────────────
     - name: Display update summary
       ansible.builtin.debug:
         msg: |
-          svc-idcreate updated (VRSCTEST):
+          svc-idcreate updated (VRSCTEST) — v2 (postgres):
             source     → {{ 'updated' if git_pull_result.changed else 'already current' }}
             image      → {{ image_name }}:{{ image_tag }} ({{ 'rebuilt' if docker_build_result.changed else 'unchanged' }})
-            containers → restarted
+            containers → restarted (postgres + provisioning + api + worker)
             .env       → {{ 'restored from backup' if env_restored.changed | default(false) else 'preserved' }}
 
           Verify:
