@@ -12,7 +12,7 @@
   vars:
     caddy_path: "/home/{{ ansible_user }}/caddy"
     caddy_container: "mains_blue_caddy-caddy-1"
-    docker_network: "{{ idcreate_vrsc_docker_network }}"
+    docker_network: "net-vrsc-blue"
     idcreate_bind_ip: "{{ idcreate_vrsc_bind_ip }}"
     idcreate_api_port: "{{ idcreate_vrsc_api_port }}"
     idcreate_domain: "{{ idcreate_vrsc_domain }}"
