@@ -60,8 +60,8 @@
 
     - name: Extract rpcuser and rpcpassword from VRSC.conf
       ansible.builtin.set_fact:
-        vrsc_rpcuser: "{{ (vrsc_conf_b64.content | b64decode | split('\\n') | list | select('search', '^rpcuser=') | first | default('')).split('=', 1)[1] | trim }}"
-        vrsc_rpcpassword: "{{ (vrsc_conf_b64.content | b64decode | split('\\n') | list | select('search', '^rpcpassword=') | first | default('')).split('=', 1)[1] | trim }}"
+        vrsc_rpcuser: "{{ vrsc_conf_b64.content | b64decode | regex_search('^rpcuser=(.*)$', '\\1') | trim }}"
+        vrsc_rpcpassword: "{{ vrsc_conf_b64.content | b64decode | regex_search('^rpcpassword=(.*)$', '\\1') | trim }}"
 
     - name: Validate RPC credentials extracted
       ansible.builtin.assert:
