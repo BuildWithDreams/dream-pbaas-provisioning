@@ -37,7 +37,7 @@
     # ── 2. Check if route already exists ────────────────────────────────────────
     - name: Check if idcreate.vrsc route already in Caddyfile
       ansible.builtin.shell:
-        cmd: "grep -q '{{ idcreate_domain }}' {{ caddy_path }}/Caddyfile && echo 'present' || echo 'absent'"
+        cmd: "grep -Fq '{{ idcreate_domain }}' {{ caddy_path }}/Caddyfile && echo 'present' || echo 'absent'"
       register: route_check
       changed_when: false
       failed_when: false
