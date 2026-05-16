@@ -1,6 +1,6 @@
 # Playbook: 42b-idcreate-caddy-route-vrsc.yml
 # Purpose: Add idcreate.vrsc.buildwithdreams.com route to the existing Caddyfile
-#          and reload Caddy. Proxies to 10.201.0.14:5003 inside net-vrsc-blue.
+#          and reload Caddy. Proxies to the VRSC idcreate bind IP on net-vrsc-blue.
 #          Caddy is already on net-vrsc-blue (native, no join needed).
 # Run with: ansible-playbook -i inventory.ini playbooks/42b-idcreate-caddy-route-vrsc.yml
 # Requires: 41b-idcreate-deploy-vrsc.yml (container running); 28-caddy-deploy.yml (Caddy deployed)

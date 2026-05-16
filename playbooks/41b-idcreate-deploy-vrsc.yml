@@ -1,5 +1,5 @@
 # Playbook: 41b-idcreate-deploy-vrsc.yml
-# Purpose: Deploy the svc-idcreate stack (postgres + provisioning + api + worker) on net-vrsc-blue at 10.201.0.14.
+# Purpose: Deploy the svc-idcreate stack (postgres + provisioning + api + worker) on net-vrsc-blue at the idcreate VRSC bind IP.
 #          Uses the Docker image built by 40b-idcreate-build-vrsc.yml.
 # Run with: ansible-playbook -i inventory.ini playbooks/41b-idcreate-deploy-vrsc.yml
 # Requires: 40b-idcreate-build-vrsc.yml (image must exist); 08-start-vrsc.yml (VRSC daemon must be running)
