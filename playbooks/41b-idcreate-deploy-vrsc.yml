@@ -268,7 +268,7 @@
                 - .env
               environment:
                 - UV_LINK_MODE=copy
-                - DATABASE_URL=${DATABASE_URL:-postgresql://{{ postgres_user }}:***@postgres:{{ postgres_port }}/{{ postgres_db }}}
+                - 'DATABASE_URL=$${DATABASE_URL:-postgresql://{{ postgres_user }}:***@postgres:{{ postgres_port }}/{{ postgres_db }}}'
               volumes:
                 - idcreate_data:/data
               command: uv run fastapi run id_create_service.py --port {{ idcreate_api_port }} --host 0.0.0.0
@@ -290,7 +290,7 @@
                 - .env
               environment:
                 - UV_LINK_MODE=copy
-                - DATABASE_URL=${DATABASE_URL:-postgresql://{{ postgres_user }}:***@postgres:{{ postgres_port }}/{{ postgres_db }}
+                - 'DATABASE_URL=$${DATABASE_URL:-postgresql://{{ postgres_user }}:***@postgres:{{ postgres_port }}/{{ postgres_db }}}'
                 - WORKER_POLL_INTERVAL_SECONDS=15
               volumes:
                 - idcreate_data:/data
