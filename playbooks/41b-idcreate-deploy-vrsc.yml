@@ -1,0 +1,363 @@
+# Playbook: 41b-idcreate-deploy-vrsc.yml
+# Purpose: Deploy the svc-idcreate stack (postgres + provisioning + api + worker) on net-vrsc-blue at 10.201.0.14.
+#          Uses the Docker image built by 40b-idcreate-build-vrsc.yml.
+# Run with: ansible-playbook -i inventory.ini playbooks/41b-idcreate-deploy-vrsc.yml
+# Requires: 40b-idcreate-build-vrsc.yml (image must exist); 08-start-vrsc.yml (VRSC daemon must be running)
+# Idempotent: safe to re-run — stops old containers before starting fresh.
+# Changes:   v1 — initial VRSC port; postgres-capable build
+---
+- name: Deploy svc-idcreate for VRSC mainnet
+  hosts: production
+  become: false
+  vars:
+    idcreate_path: "{{ idcreate_vrsc_path }}"
+    compose_project: "{{ idcreate_vrsc_compose_project }}"
+    docker_network: "{{ idcreate_vrsc_docker_network }}"
+    idcreate_bind_ip: "{{ idcreate_vrsc_bind_ip }}"
+    idcreate_api_port: "{{ idcreate_vrsc_api_port }}"
+    provisioning_port: "{{ idcreate_vrsc_provisioning_port }}"
+    postgres_port: "{{ idcreate_vrsc_postgres_port }}"
+    image_name: "{{ idcreate_vrsc_image_name }}"
+    image_tag: "{{ idcreate_vrsc_image_tag }}"
+    postgres_image: "{{ idcreate_vrsc_postgres_image }}"
+    postgres_db: "{{ idcreate_vrsc_postgres_db }}"
+    postgres_user: "{{ idcreate_vrsc_postgres_user }}"
+    verusd_vrsc_rpc_host: "{{ idcreate_vrsc_rpc_host }}"
+    verusd_vrsc_rpc_port: "{{ idcreate_vrsc_rpc_port }}"
+    verusd_conf_path: "vrsc/data_dir/VRSC.conf"
+    native_coin: "VRSC"
+    health_rpc_daemon: "verusd_vrsc"
+
+  tasks:
+    # ── 1. Verify image exists ──────────────────────────────────────────────────
+    - name: Verify image is built
+      ansible.builtin.shell:
+        cmd: "docker image inspect {{ image_name }}:{{ image_tag }} > /dev/null 2>&1 && echo 'ok' || echo 'missing'"
+      register: image_check
+      changed_when: false
+      failed_when: image_check.stdout != 'ok'
+
+    # ── 2. Stop existing containers (all variants) ──────────────────────────────
+    - name: Stop old containers if running
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} down 2>/dev/null || true"
+      changed_when: true
+      failed_when: false
+
+    # ── 3. Read VRSC RPC credentials from VRSC.conf ──────────────────────────────
+    - name: Read VRSC.conf
+      ansible.builtin.slurp:
+        src: "/home/{{ ansible_user }}/docker-verusd/{{ verusd_conf_path }}"
+      register: vrsc_conf_b64
+      failed_when: false
+
+    - name: Fail if VRSC.conf not found
+      ansible.builtin.fail:
+        msg: |
+          VRSC.conf not found at /home/{{ ansible_user }}/docker-verusd/{{ verusd_conf_path }}.
+          Start VRSC daemon first so the config is generated.
+      when: vrsc_conf_b64.failed | default(false)
+
+    - name: Extract rpcuser and rpcpassword from VRSC.conf
+      ansible.builtin.set_fact:
+        vrsc_rpcuser: "{{ (vrsc_conf_b64.content | b64decode | split('\\n') | list | select('search', '^rpcuser=') | first | default('')).split('=', 1)[1] | trim }}"
+        vrsc_rpcpassword: "{{ (vrsc_conf_b64.content | b64decode | split('\\n') | list | select('search', '^rpcpassword=') | first | default('')).split('=', 1)[1] | trim }}"
+
+    - name: Validate RPC credentials extracted
+      ansible.builtin.assert:
+        that:
+          - vrsc_rpcuser | length > 0
+          - vrsc_rpcpassword | length > 0
+        fail_msg: "Could not extract rpcuser/rpcpassword from VRSC.conf"
+
+    # ── 4. Ensure .env exists with all required vars ───────────────────────────
+    - name: Check if .env already exists
+      ansible.builtin.stat:
+        path: "{{ idcreate_path }}/.env"
+      register: env_file_stat
+
+    - name: Copy env.sample to .env if missing
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ idcreate_path }}/env.sample"
+        dest: "{{ idcreate_path }}/.env"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      when: not env_file_stat.stat.exists
+      register: env_copied
+
+    - name: Display .env status
+      ansible.builtin.debug:
+        msg: "{{ '.env created from env.sample' if env_copied.changed | default(false) else '.env already present — vars will be updated in place' }}"
+
+    # ── 5. Update .env with all required vars ──────────────────────────────────
+    - name: Set verusd_vrsc_rpc_enabled
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^verusd_vrsc_rpc_enabled\\s*='
+        line: 'verusd_vrsc_rpc_enabled="true"'
+        state: present
+
+    - name: Set verusd_vrsc_rpc_user
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^verusd_vrsc_rpc_user\\s*='
+        line: 'verusd_vrsc_rpc_user="{{ vrsc_rpcuser }}"'
+        state: present
+
+    - name: Set verusd_vrsc_rpc_password
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^verusd_vrsc_rpc_password\\s*='
+        line: 'verusd_vrsc_rpc_password="{{ vrsc_rpcpassword }}"'
+        state: present
+
+    - name: Set verusd_vrsc_rpc_host
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^verusd_vrsc_rpc_host\\s*='
+        line: 'verusd_vrsc_rpc_host="{{ verusd_vrsc_rpc_host }}"'
+        state: present
+
+    - name: Set verusd_vrsc_rpc_port
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^verusd_vrsc_rpc_port\\s*='
+        line: 'verusd_vrsc_rpc_port="{{ verusd_vrsc_rpc_port }}"'
+        state: present
+
+    - name: Set NATIVE_COIN
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^NATIVE_COIN='
+        line: 'NATIVE_COIN="{{ native_coin }}"'
+        state: present
+
+    - name: Set HEALTH_RPC_DAEMON
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^HEALTH_RPC_DAEMON='
+        line: 'HEALTH_RPC_DAEMON="{{ health_rpc_daemon }}"'
+        state: present
+
+    # Provisioning adapter — required for postgres-capable build
+    - name: Set PROVISIONING_ADAPTER_MODE to http
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^PROVISIONING_ADAPTER_MODE='
+        line: 'PROVISIONING_ADAPTER_MODE="http"'
+        state: present
+
+    - name: Set PROVISIONING_SERVICE_URL
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^PROVISIONING_SERVICE_URL='
+        line: 'PROVISIONING_SERVICE_URL="http://127.0.0.1:{{ provisioning_port }}"'
+        state: present
+
+    - name: Set PROVISIONING_HTTP_TIMEOUT_SECONDS
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^PROVISIONING_HTTP_TIMEOUT_SECONDS='
+        line: 'PROVISIONING_HTTP_TIMEOUT_SECONDS="10"'
+        state: present
+
+    - name: Set PROVISIONING_RETRY_COUNT
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^PROVISIONING_RETRY_COUNT='
+        line: 'PROVISIONING_RETRY_COUNT="1"'
+        state: present
+
+    - name: Set PROVISIONING_LOG_LEVEL
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^PROVISIONING_LOG_LEVEL='
+        line: 'PROVISIONING_LOG_LEVEL="INFO"'
+        state: present
+
+    # DATABASE_URL — placeholder only; real password written in step 6
+    - name: Ensure DATABASE_URL placeholder is set in .env
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^DATABASE_URL='
+        line: 'DATABASE_URL="postgresql://{{ postgres_user }}:***@postgres:{{ postgres_port }}/{{ postgres_db }}"'
+        state: present
+
+    # ── 6. Generate strong postgres password ─────────────────────────────────────
+    - name: Generate postgres password
+      ansible.builtin.shell:
+        cmd: "python3 -c \"import secrets; print(secrets.token_hex(32))\""
+      register: pg_password
+      changed_when: true
+
+    - name: Set DATABASE_URL with generated password
+      ansible.builtin.lineinfile:
+        path: "{{ idcreate_path }}/.env"
+        regexp: '^DATABASE_URL='
+        line: 'DATABASE_URL="postgresql://{{ postgres_user }}:***@postgres:{{ postgres_port }}/{{ postgres_db }}"'
+        state: present
+
+    - name: Show generated postgres credentials
+      ansible.builtin.debug:
+        msg: |
+          PostgreSQL will be started with:
+            user     → {{ postgres_user }}
+            password → <generated, stored in .env>
+            database → {{ postgres_db }}
+            host     → postgres (Docker DNS, container network)
+
+    # ── 7. Write docker-compose.yml ─────────────────────────────────────────────
+    - name: Create docker-compose.yml
+      ansible.builtin.copy:
+        content: |
+          # docker-compose.yml — svc-idcreate (VRSC mainnet / dev201)
+          # Built from: {{ image_name }}:{{ image_tag }}
+          version: "3.9"
+
+          services:
+            postgres:
+              image: {{ postgres_image }}
+              container_name: {{ compose_project }}-postgres-1
+              restart: unless-stopped
+              environment:
+                - POSTGRES_DB={{ postgres_db }}
+                - POSTGRES_USER={{ postgres_user }}
+                - POSTGRES_PASSWORD={{ pg_password.stdout }}
+              ports:
+                - "127.0.0.1:{{ postgres_port }}:{{ postgres_port }}"
+              volumes:
+                - idcreate_postgres_data:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U {{ postgres_user }} -d {{ postgres_db }}"]
+                interval: 10s
+                timeout: 5s
+                retries: 10
+              networks:
+                pbaas_network:
+
+            provisioning:
+              build:
+                context: .
+              container_name: {{ compose_project }}-provisioning-1
+              restart: unless-stopped
+              ports:
+                - "{{ provisioning_port }}:{{ provisioning_port }}"
+              environment:
+                - PORT={{ provisioning_port }}
+                - NODE_BIN=node
+                - PROVISIONING_SCRIPT_ROOT=/workspace/provisioning
+              volumes:
+                - .:/workspace:ro
+              networks:
+                pbaas_network:
+
+            api:
+              image: {{ image_name }}:{{ image_tag }}
+              container_name: {{ compose_project }}-api-1
+              hostname: idcreate-api
+              depends_on:
+                postgres:
+                  condition: service_healthy
+                provisioning:
+                  condition: service_started
+              ports:
+                - "127.0.0.1:{{ idcreate_api_port }}:{{ idcreate_api_port }}"
+              env_file:
+                - .env
+              environment:
+                - UV_LINK_MODE=copy
+                - DATABASE_URL=${DATABASE_URL:-postgresql://{{ postgres_user }}:***@postgres:{{ postgres_port }}/{{ postgres_db }}}
+              volumes:
+                - idcreate_data:/data
+              command: uv run fastapi run id_create_service.py --port {{ idcreate_api_port }} --host 0.0.0.0
+              restart: unless-stopped
+              networks:
+                pbaas_network:
+                  ipv4_address: {{ idcreate_bind_ip }}
+
+            worker:
+              image: {{ image_name }}:{{ image_tag }}
+              container_name: {{ compose_project }}-worker-1
+              hostname: idcreate-worker
+              depends_on:
+                postgres:
+                  condition: service_healthy
+                api:
+                  condition: service_started
+              env_file:
+                - .env
+              environment:
+                - UV_LINK_MODE=copy
+                - DATABASE_URL=${DATABASE_URL:-postgresql://{{ postgres_user }}:***@postgres:{{ postgres_port }}/{{ postgres_db }}
+                - WORKER_POLL_INTERVAL_SECONDS=15
+              volumes:
+                - idcreate_data:/data
+              command: /bin/sh -c "while true; do uv run python worker.py; sleep $${WORKER_POLL_INTERVAL_SECONDS:-15}; done"
+              restart: unless-stopped
+              networks:
+                pbaas_network:
+
+          volumes:
+            idcreate_postgres_data:
+            idcreate_data:
+
+          networks:
+            pbaas_network:
+              name: {{ docker_network }}
+              external: true
+        dest: "{{ idcreate_path }}/docker-compose.yml"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Display compose file path
+      ansible.builtin.debug:
+        msg: "docker-compose.yml written to {{ idcreate_path }}/docker-compose.yml"
+
+    # ── 8. Deploy with docker compose ──────────────────────────────────────────
+    - name: Start svc-idcreate containers
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} up -d --force-recreate"
+      register: compose_up
+      changed_when: true
+
+    # ── 9. Wait for postgres to be healthy before declaring success ─────────────
+    - name: Wait for postgres to be healthy
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ compose_project }}-postgres-1' | grep -v 'Up' | wc -l | tr -d ' '"
+      register: pg_check
+      changed_when: false
+      retries: 15
+      delay: 10
+      until: pg_check.stdout | int == 0
+      failed_when: false
+
+    # ── 10. Wait for api container to be running ─────────────────────────────────
+    - name: Verify api container is running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ compose_project }}-api-1' | head -1 || true"
+      register: api_running
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: api_running.stdout | length > 0
+      failed_when: false
+
+    # ── 11. Summary ────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          svc-idcreate deployed (VRSC mainnet) — v1:
+            compose project → {{ compose_project }}
+            network         → {{ docker_network }}
+            API IP          → {{ idcreate_bind_ip }}:{{ idcreate_api_port }}
+            postgres        → {{ compose_project }}-postgres-1
+            provisioning    → {{ compose_project }}-provisioning-1
+            containers      → api, worker, postgres, provisioning
+            image           → {{ image_name }}:{{ image_tag }}
+
+          Verify:
+            ssh <host> "docker ps | grep {{ compose_project }}"
+            curl http://{{ idcreate_bind_ip }}:{{ idcreate_api_port }}/health

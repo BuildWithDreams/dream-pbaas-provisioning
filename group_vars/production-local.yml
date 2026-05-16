@@ -48,8 +48,8 @@ idcreate_vrsc_image_tag: "local"
 idcreate_vrsc_postgres_image: "postgres:16-alpine"
 idcreate_vrsc_postgres_db: "idcreate"
 idcreate_vrsc_postgres_user: "idcreate"
-# VRSC daemon RPC (VRSC-specific overrides — VRSCTEST uses values above)
-verusd_vrsc_rpc_host: "10.201.0.11"
-verusd_vrsc_rpc_port: "27486"
+# VRSC daemon RPC (dedicated VRSC RPC vars — clean separation from chain-level verusd_*)
+idcreate_vrsc_rpc_host: "10.201.0.11"
+idcreate_vrsc_rpc_port: "27486"
 # VRSC-specific Caddy/domain
 idcreate_vrsc_domain: "idcreate.vrsc.buildwithdreams.com"

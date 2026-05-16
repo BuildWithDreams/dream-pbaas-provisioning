@@ -1,0 +1,62 @@
+# Playbook: 47b-idcreate-restart-vrsc.yml
+# Purpose: Restart svc-idcreate containers to pick up new .env changes (VRSC mainnet).
+#          Use this after editing ~/svc-idcreate-vrsc/.env (new env vars).
+#          docker compose restart does NOT re-read .env — use up --force-recreate.
+# Run with: ansible-playbook -i inventory.ini playbooks/47b-idcreate-restart-vrsc.yml
+# Idempotent: safe to re-run.
+# Changes:   v1 — initial VRSC port
+---
+- name: Restart svc-idcreate to pick up new .env (VRSC mainnet)
+  hosts: production
+  become: false
+  vars:
+    idcreate_path: "{{ idcreate_vrsc_path }}"
+    compose_project: "{{ idcreate_vrsc_compose_project }}"
+    idcreate_bind_ip: "{{ idcreate_vrsc_bind_ip }}"
+    idcreate_api_port: "{{ idcreate_vrsc_api_port }}"
+
+  tasks:
+    - name: Restart containers with force-recreate to pick up .env changes
+      ansible.builtin.shell:
+        cmd: "cd {{ idcreate_path }} && docker compose -p {{ compose_project }} up -d --force-recreate"
+      register: compose_restart
+      changed_when: true
+
+    # ── Wait for postgres to be healthy ─────────────────────────────────────────
+    - name: Wait for postgres to be healthy
+      ansible.builtin.shell:
+        cmd: "docker ps 2>&1 | grep '{{ compose_project }}-postgres-1' | grep -v 'Up' | wc -l | tr -d ' '"
+      register: pg_check
+      changed_when: false
+      retries: 15
+      delay: 10
+      until: pg_check.stdout | int == 0
+      failed_when: false
+
+    - name: Log postgres health
+      ansible.builtin.debug:
+        msg: "PostgreSQL container is healthy"
+      when: pg_check.stdout | int == 0
+
+    # ── Wait for api to be reachable ────────────────────────────────────────────
+    - name: Wait for api to be reachable
+      ansible.builtin.wait_for:
+        host: "{{ idcreate_bind_ip }}"
+        port: "{{ idcreate_api_port }}"
+        delay: 5
+        timeout: 60
+        state: started
+      changed_when: false
+      failed_when: false
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    - name: Display restart result
+      ansible.builtin.debug:
+        msg: |
+          svc-idcreate restarted (VRSC mainnet):
+            idcreate_path     → {{ idcreate_path }}
+            compose_project   → {{ compose_project }}
+            api IP            → {{ idcreate_bind_ip }}:{{ idcreate_api_port }}
+
+          Verify:
+            curl http://{{ idcreate_bind_ip }}:{{ idcreate_api_port }}/health
