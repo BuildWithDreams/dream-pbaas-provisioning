@@ -24,7 +24,7 @@
     postgres_user: "{{ idcreate_vrsc_postgres_user }}"
     verusd_vrsc_rpc_host: "{{ idcreate_vrsc_rpc_host }}"
     verusd_vrsc_rpc_port: "{{ idcreate_vrsc_rpc_port }}"
-    verusd_conf_path: "vrsc/data_dir/VRSC.conf"
+    verusd_conf_path: "mainnet/data_dir/VRSC.conf"
     native_coin: "VRSC"
     health_rpc_daemon: "verusd_vrsc"
 
