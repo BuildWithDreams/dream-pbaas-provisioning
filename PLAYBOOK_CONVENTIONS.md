@@ -67,6 +67,7 @@ Container names become `<project_name>-<service>-1`.
 |-------|-------------|-----------------|
 | VRSC mainnet | `mains_blue` | `mains_blue-vrsc-1` |
 | VRSC mainnet (failover) | `mains_green` | `mains_green-vrsc-1` |
+| VRSC mainnet idcreate | `dev201_idcreate` | `dev201_idcreate-api-1` ⚠️ |
 | vRSCTEST | `test_blue` | `test_blue-vrsc-1` |
 | vDEX PBaaS | `vdex_blue` | `vdex_blue-vdex-1` |
 | varrr PBaaS | `varrr_blue` | `varrr_blue-varrr-1` |
@@ -164,7 +165,21 @@ Known IDs (confirmed on BWD):
 | `27-qr-creator-deploy.yml` | Build + deploy QR creator on net-vrsc-blue (.13) |
 | `28-caddy-deploy.yml` | Deploy Caddy reverse proxy + Lets Encrypt on net-vrsc-blue (.10) |
 | `29-caddy-teardown.yml` | Remove Caddy container, compose project, and data |
-| `39-idcreate-clone.yml` | Clone BuildWithDreams/svc-idcreate repo |
-| `40-idcreate-build.yml` | Build svc-idcreate Docker image |
+| `39-idcreate-clone.yml` | Clone BuildWithDreams/svc-idcreate repo (VRSCTEST) |
+| `40-idcreate-build.yml` | Build svc-idcreate Docker image (VRSCTEST) |
 | `41-idcreate-deploy.yml` | Deploy idcreate stack (api + worker) on net-vrsctest (.14) |
 | `42-idcreate-caddy-route.yml` | Add idcreate.vrsctest.buildwithdreams.com route to Caddy |
+| `43-idcreate-add-api-key.yml` | Generate + persist REGISTRAR_API_KEYS (VRSCTEST) |
+| `44-idcreate-source-of-funds.yml` | Set SOURCE_OF_FUNDS (VRSCTEST) |
+| `45-idcreate-update.yml` | Pull + rebuild + restart (VRSCTEST) |
+| `46-idcreate-allowed-parents.yml` | Set allowed parent currencies (VRSCTEST) |
+| `47-idcreate-restart.yml` | Restart to pick up .env changes (VRSCTEST) |
+| `39b-idcreate-clone-vrsc.yml` | Clone svc-idcreate repo for VRSC mainnet |
+| `40b-idcreate-build-vrsc.yml` | Build VRSC idcreate Docker image |
+| `41b-idcreate-deploy-vrsc.yml` | Deploy VRSC idcreate stack on net-vrsc-blue (.14) via net-vrsctest |
+| `42b-idcreate-caddy-route-vrsc.yml` | Add idcreate.vrsc.buildwithdreams.com route to Caddy |
+| `43b-idcreate-add-api-key-vrsc.yml` | Generate + persist REGISTRAR_API_KEYS for VRSC |
+| `44b-idcreate-source-of-funds-vrsc.yml` | Set source of funds for VRSC |
+| `45b-idcreate-update-vrsc.yml` | Pull + rebuild + restart VRSC idcreate |
+| `46b-idcreate-allowed-parents-vrsc.yml` | Configure allowed parent currencies for VRSC |
+| `47b-idcreate-restart-vrsc.yml` | Restart VRSC idcreate to pick up .env changes |
