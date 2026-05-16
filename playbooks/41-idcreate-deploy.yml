@@ -24,9 +24,7 @@
     postgres_user: "{{ postgres_user }}"
     verusd_vrsc_rpc_host: "{{ verusd_vrsc_rpc_host }}"
     verusd_vrsc_rpc_port: "{{ verusd_vrsc_rpc_port }}"
-    verusd_conf_path: "vrsctest/data_dir/vrsctest.conf"
-    native_coin: "VRSCTEST"
-    health_rpc_daemon: "verusd_vrsc"
+    # verusd_conf_path, native_coin, health_rpc_daemon — inherited from production-local.yml
 
   tasks:
     # ── 1. Verify image exists ──────────────────────────────────────────────────
