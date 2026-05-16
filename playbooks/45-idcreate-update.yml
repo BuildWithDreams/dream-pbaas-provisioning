@@ -10,10 +10,10 @@
   become: false
   vars:
     idcreate_repo_url: "https://github.com/BuildWithDreams/svc-idcreate.git"
-    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
-    compose_project: "dev200_idcreate"
-    image_name: "buildwithdreams/svc-idcreate"
-    image_tag: "local"
+    idcreate_path: "{{ idcreate_path }}"
+    compose_project: "{{ compose_project }}"
+    image_name: "{{ image_name }}"
+    image_tag: "{{ image_tag }}"
 
   tasks:
     # ── 1. Verify idcreate directory exists ───────────────────────────────────

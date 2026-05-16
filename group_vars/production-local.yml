@@ -14,7 +14,7 @@ clone_destinations:
 caddy_letsencrypt_email: "hermesreport@verus.trading"
 caddy_domain: "buildwithdreams.com"
 
-# ── idcreate service ───────────────────────────────────────────────────────
+# ── idcreate VRSCTEST ─────────────────────────────────────────────────────────
 idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
 compose_project: "dev200_idcreate"
 docker_network: "net-vrsctest"
@@ -27,9 +27,13 @@ image_tag: "local"
 postgres_image: "postgres:16-alpine"
 postgres_db: "idcreate"
 postgres_user: "idcreate"
-# VRSCTEST daemon RPC host
+# VRSCTEST daemon RPC
 verusd_vrsc_rpc_host: "10.200.0.11"
 verusd_vrsc_rpc_port: "18843"
+idcreate_domain: "idcreate.vrsctest.buildwithdreams.com"
+native_coin: "VRSCTEST"
+health_rpc_daemon: "verusd_vrsc"
+verusd_conf_path: "vrsctest/data_dir/vrsctest.conf"
 
 # ── idcreate VRSC mainnet ─────────────────────────────────────────────────────
 idcreate_vrsc_path: "/home/{{ ansible_user }}/svc-idcreate-vrsc"

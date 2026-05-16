@@ -10,10 +10,10 @@
   hosts: production
   become: false
   vars:
-    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
-    compose_project: "dev200_idcreate"
-    idcreate_bind_ip: "10.200.0.14"
-    idcreate_api_port: "5003"
+    idcreate_path: "{{ idcreate_path }}"
+    compose_project: "{{ compose_project }}"
+    idcreate_bind_ip: "{{ idcreate_bind_ip }}"
+    idcreate_api_port: "{{ idcreate_api_port }}"
 
   tasks:
     - name: Restart containers with force-recreate to pick up .env changes

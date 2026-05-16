@@ -24,6 +24,9 @@
     postgres_user: "{{ postgres_user }}"
     verusd_vrsc_rpc_host: "{{ verusd_vrsc_rpc_host }}"
     verusd_vrsc_rpc_port: "{{ verusd_vrsc_rpc_port }}"
+    verusd_conf_path: "vrsctest/data_dir/vrsctest.conf"
+    native_coin: "VRSCTEST"
+    health_rpc_daemon: "verusd_vrsc"
 
   tasks:
     # ── 1. Verify image exists ──────────────────────────────────────────────────
@@ -44,7 +47,7 @@
     # ── 3. Read VRSCTEST RPC credentials from vrsctest.conf ─────────────────────
     - name: Read vrsctest.conf
       ansible.builtin.slurp:
-        src: "/home/{{ ansible_user }}/docker-verusd/vrsctest/data_dir/vrsctest.conf"
+        src: "/home/{{ ansible_user }}/docker-verusd/{{ verusd_conf_path }}"
       register: vrsctest_conf_b64
       failed_when: false
 
@@ -123,18 +126,18 @@
         line: 'verusd_vrsc_rpc_port="{{ verusd_vrsc_rpc_port }}"'
         state: present
 
-    - name: Set NATIVE_COIN to VRSCTEST
+    - name: Set NATIVE_COIN
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^NATIVE_COIN='
-        line: 'NATIVE_COIN="VRSCTEST"'
+        line: 'NATIVE_COIN="{{ native_coin }}"'
         state: present
 
     - name: Set HEALTH_RPC_DAEMON
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^HEALTH_RPC_DAEMON='
-        line: 'HEALTH_RPC_DAEMON="verusd_vrsc"'
+        line: 'HEALTH_RPC_DAEMON="{{ health_rpc_daemon }}"'
         state: present
 
     # Provisioning adapter — required for postgres-capable build

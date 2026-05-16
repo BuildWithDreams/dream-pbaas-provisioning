@@ -7,8 +7,8 @@
   hosts: production
   become: false
   vars:
-    idcreate_path: "/home/{{ ansible_user }}/svc-idcreate"
-    compose_project: "dev200_idcreate"
+    idcreate_path: "{{ idcreate_path }}"
+    compose_project: "{{ compose_project }}"
 
   tasks:
     # ── 1. Validate input ──────────────────────────────────────────────────────

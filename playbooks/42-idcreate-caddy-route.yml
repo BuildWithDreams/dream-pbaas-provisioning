@@ -12,10 +12,10 @@
   vars:
     caddy_path: "/home/{{ ansible_user }}/caddy"
     caddy_container: "mains_blue_caddy-caddy-1"
-    docker_network: "net-vrsctest"
-    idcreate_bind_ip: "10.200.0.14"
-    idcreate_api_port: "5003"
-    idcreate_domain: "idcreate.vrsctest.buildwithdreams.com"
+    docker_network: "{{ docker_network }}"
+    idcreate_bind_ip: "{{ idcreate_bind_ip }}"
+    idcreate_api_port: "{{ idcreate_api_port }}"
+    idcreate_domain: "{{ idcreate_domain }}"
 
   tasks:
     # ── 0. Pre-flight: verify Caddy is on net-vrsctest ──────────────────────────
