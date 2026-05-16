@@ -1,6 +1,6 @@
 # Playbook: 42b-idcreate-caddy-route-vrsc.yml
 # Purpose: Add idcreate.vrsc.buildwithdreams.com route to the existing Caddyfile
-#          and reload Caddy. Proxies to 10.200.0.14:5003 inside net-vrsctest.
+#          and reload Caddy. Proxies to the idcreate VRSC bind IP on net-vrsctest.
 #          Caddy is already on net-vrsc-blue (native, no join needed).
 # Run with: ansible-playbook -i inventory.ini playbooks/42b-idcreate-caddy-route-vrsc.yml
 # Requires: 41b-idcreate-deploy-vrsc.yml (container running); 28-caddy-deploy.yml (Caddy deployed)
@@ -13,9 +13,9 @@
     caddy_path: "/home/{{ ansible_user }}/caddy"
     caddy_container: "mains_blue_caddy-caddy-1"
     docker_network: "net-vrsc-blue"
-    idcreate_bind_ip: "10.200.0.14"
-    idcreate_api_port: "5003"
-    idcreate_domain: "idcreate.vrsc.buildwithdreams.com"
+    idcreate_bind_ip: "{{ idcreate_vrsc_bind_ip }}"
+    idcreate_api_port: "{{ idcreate_vrsc_api_port }}"
+    idcreate_domain: "{{ idcreate_vrsc_domain }}"
 
   tasks:
     # ── 0. Pre-flight: verify Caddy is on net-vrsc-blue ──────────────────────────
@@ -52,8 +52,8 @@
         path: "{{ caddy_path }}/Caddyfile"
         marker: "# {mark} ANSIBLE MANAGED BLOCK — idcreate.vrsc.buildwithdreams.com"
         content: |
-          idcreate.vrsc.buildwithdreams.com {
-            reverse_proxy 10.200.0.14:5003
+          {{ idcreate_domain }} {
+            reverse_proxy {{ idcreate_bind_ip }}:{{ idcreate_api_port }}
             tls hermesreport@verus.trading
             log {
               output file /data/access.log

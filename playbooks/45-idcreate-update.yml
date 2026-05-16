@@ -141,4 +141,4 @@
             .env       → {{ 'restored from backup' if env_restored.changed | default(false) else 'preserved' }}
 
           Verify:
-            curl http://10.200.0.14:5003/health
+            curl http://{{ idcreate_bind_ip }}:{{ idcreate_api_port }}/health
