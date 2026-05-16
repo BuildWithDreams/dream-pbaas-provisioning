@@ -47,7 +47,7 @@
     # ── 3. Read VRSC RPC credentials from VRSC.conf ──────────────────────────────
     - name: Read VRSC.conf
       ansible.builtin.slurp:
-        src: "/home/{{ ansible_user }}/docker-verusd/{{ verusd_conf_path }}"
+        src: "/home/{{ ansible_user }}/docker-verusd/{{ idcreate_vrsc_verusd_conf_path }}"
       register: vrsc_conf_b64
       failed_when: false
 

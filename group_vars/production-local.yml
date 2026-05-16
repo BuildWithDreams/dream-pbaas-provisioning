@@ -33,7 +33,7 @@ verusd_vrsc_rpc_port: "18843"
 idcreate_domain: "idcreate.vrsctest.buildwithdreams.com"
 native_coin: "VRSCTEST"
 health_rpc_daemon: "verusd_vrsc"
-verusd_conf_path: "mainnet/data_dir/VRSC.conf"
+verusd_conf_path: "vrsctest/data_dir/vrsctest.conf"
 
 # ── idcreate VRSC mainnet ─────────────────────────────────────────────────────
 idcreate_vrsc_path: "/home/{{ ansible_user }}/svc-idcreate-vrsc"
@@ -48,6 +48,7 @@ idcreate_vrsc_image_tag: "local"
 idcreate_vrsc_postgres_image: "postgres:16-alpine"
 idcreate_vrsc_postgres_db: "idcreate"
 idcreate_vrsc_postgres_user: "idcreate"
+idcreate_vrsc_verusd_conf_path: "mainnet/data_dir/VRSC.conf"
 # VRSC daemon RPC (dedicated VRSC RPC vars — clean separation from chain-level verusd_*)
 idcreate_vrsc_rpc_host: "10.201.0.11"
 idcreate_vrsc_rpc_port: "27486"
