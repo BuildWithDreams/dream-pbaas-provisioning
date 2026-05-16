@@ -24,6 +24,11 @@
           Clone {{ idcreate_repo_url }} to {{ idcreate_path }}.
           {{ 'Directory exists — will pull latest.' if idcreate_dir_stat.stat.exists else 'Will clone fresh.' }}
 
+    - name: Fix .git ownership if exists (prevent permission errors on git fetch)
+      ansible.builtin.shell:
+        cmd: "chown -R {{ ansible_user }} {{ idcreate_path }}/.git 2>/dev/null || true"
+      changed_when: true
+
     - name: Clone or update repository
       ansible.builtin.git:
         repo: "{{ idcreate_repo_url }}"
