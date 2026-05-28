@@ -179,7 +179,7 @@
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^DATABASE_URL='
-        line: 'DATABASE_URL="postgresql://{{ postgres_user }}:***@{{ idcreate_postgres_service_name }}:{{ postgres_port }}/{{ postgres_db }}"'
+        line: 'DATABASE_URL="postgresql://{{ postgres_user }}:CHANGE_ME@{{ idcreate_postgres_service_name }}:{{ postgres_port }}/{{ postgres_db }}"'
         state: present
 
     # ── 6. Generate strong postgres password ─────────────────────────────────────
@@ -189,11 +189,12 @@
       register: pg_password
       changed_when: true
 
+
     - name: Set DATABASE_URL with generated password
       ansible.builtin.lineinfile:
         path: "{{ idcreate_path }}/.env"
         regexp: '^DATABASE_URL='
-        line: 'DATABASE_URL="postgresql://{{ postgres_user }}:{{ pg_password.stdout }}@{{ idcreate_postgres_service_name }}:{{ postgres_port }}/{{ postgres_db }}"'
+        line: 'DATABASE_URL="postgresql://{{ postgres_user }}:CHANGE_ME@{{ idcreate_postgres_service_name }}:{{ postgres_port }}/{{ postgres_db }}"'
         state: present
 
     - name: Show generated postgres credentials
@@ -220,7 +221,7 @@
               environment:
                 - POSTGRES_DB={{ postgres_db }}
                 - POSTGRES_USER={{ postgres_user }}
-                - POSTGRES_PASSWORD={{ pg_password.stdout }}
+                - POSTGRES_PASSWORD=CHANGE_ME
               ports:
                 - "127.0.0.1:{{ postgres_port }}:{{ postgres_port }}"
               volumes:
@@ -285,7 +286,7 @@
                 - .env
               environment:
                 - UV_LINK_MODE=copy
-                - DATABASE_URL=${DATABASE_URL:-postgresql://{{ postgres_user }}:***@{{ idcreate_postgres_service_name }}:{{ postgres_port }}/{{ postgres_db }}}
+                - DATABASE_URL=${DATABASE_URL:-postgresql://{{ postgres_user }}:{{ pg_password.stdout }}@{{ idcreate_postgres_service_name }}:{{ postgres_port }}/{{ postgres_db }}}
                 - WORKER_POLL_INTERVAL_SECONDS=15
               volumes:
                 - idcreate_data:/data
