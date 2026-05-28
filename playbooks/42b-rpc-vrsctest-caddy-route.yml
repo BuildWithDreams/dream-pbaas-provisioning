@@ -1,26 +1,27 @@
-# Playbook: 42b-idcreate-caddy-route-vrsc.yml
-# Purpose: Add idcreate.vrsc.buildwithdreams.com route to Caddy on net-vrsc-blue.
+# Playbook: 42b-rpc-vrsctest-caddy-route.yml
+# Purpose: Add rpc.vrsctest.<domain> route to Caddy on net-vrsctest.
 #          Uses remove-then-add pattern so IP changes are always applied cleanly.
-#          Caddy is already on net-vrsc-blue (native, no join needed).
-# Requires: -e @group_vars/production-local.yml (provides idcreate_vrsc_* vars)
-#          41b-idcreate-deploy-vrsc.yml (container running); 28-caddy-deploy.yml (Caddy deployed)
+#          Caddy is already on net-vrsctest (no join needed).
+# Requires: -e @group_vars/production-local.yml
+#          VRSCTEST verusd + rpc_server containers running; Caddy deployed
 # Idempotent: safe to re-run — always removes old block then adds fresh one.
+# Run with: ansible-playbook -i inventory.ini playbooks/42b-rpc-vrsctest-caddy-route.yml
+#             -e caddy_domain=buildwithdreams.com
 ---
-- name: Add idcreate.vrsc Caddy route
+- name: Add rpc.vrsctest Caddy route
   hosts: production
   become: false
   vars:
     caddy_path: "/home/{{ ansible_user }}/caddy"
     caddy_container: "mains_blue_caddy-caddy-1"
-    docker_network: "net-vrsc-blue"
-    idcreate_bind_ip: "{{ idcreate_vrsc_bind_ip }}"
-    idcreate_api_port: "{{ idcreate_vrsc_api_port }}"
-    idcreate_domain: "{{ idcreate_vrsc_domain }}"
+    docker_network: "net-vrsctest"
+    rpc_bind_ip: "10.200.0.12"
+    rpc_port: "37486"
+    rpc_domain: "rpc.vrsctest.{{ caddy_domain }}"
 
   tasks:
-    # ── 0. Pre-flight: verify Caddy is on net-vrsc-blue ──────────────────────────
-    # Unlike VRSCTEST, VRSC Caddy is natively on net-vrsc-blue (no join step needed)
-    - name: Verify Caddy is connected to net-vrsc-blue (pre-flight)
+    # ── 0. Pre-flight: verify Caddy is on net-vrsctest ──────────────────────────
+    - name: Verify Caddy is connected to net-vrsctest (pre-flight)
       ansible.builtin.shell:
         cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' 2>/dev/null | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'missing'"
       register: caddy_network_preflight
@@ -35,10 +36,10 @@
       failed_when: not caddyfile_stat.stat.exists
 
     # ── 2. Remove existing route block if present (ensure clean IP) ────────────
-    - name: Remove any existing idcreate.vrsc route block
+    - name: Remove any existing rpc.vrsctest route block
       ansible.builtin.blockinfile:
         path: "{{ caddy_path }}/Caddyfile"
-        marker: "# BEGIN ANSIBLE MANAGED BLOCK — idcreate.vrsc.buildwithdreams.com"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK — rpc.vrsctest.buildwithdreams.com"
         state: absent
       register: route_removed
       failed_when: false
@@ -48,25 +49,25 @@
         msg: "Existing route block {{ 'removed' if route_removed.changed else 'not found' }}"
 
     # ── 3. Re-check after removal ──────────────────────────────────────────────
-    - name: Check if idcreate.vrsc route in Caddyfile after cleanup
+    - name: Check if rpc.vrsctest route in Caddyfile after cleanup
       ansible.builtin.shell:
-        cmd: "grep -Fq '{{ idcreate_domain }}' {{ caddy_path }}/Caddyfile && echo 'present' || echo 'absent'"
+        cmd: "grep -Fq '{{ rpc_domain }}' {{ caddy_path }}/Caddyfile && echo 'present' || echo 'absent'"
       register: route_check
       changed_when: false
       failed_when: false
 
     - name: Display route status
       ansible.builtin.debug:
-        msg: "idcreate.vrsc route in Caddyfile: {{ route_check.stdout }}"
+        msg: "rpc.vrsctest route in Caddyfile: {{ route_check.stdout }}"
 
     # ── 4. Add route block ────────────────────────────────────────────────────
-    - name: Append idcreate.vrsc route to Caddyfile
+    - name: Append rpc.vrsctest route to Caddyfile
       ansible.builtin.blockinfile:
         path: "{{ caddy_path }}/Caddyfile"
-        marker: "# {mark} ANSIBLE MANAGED BLOCK — idcreate.vrsc.buildwithdreams.com"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK — rpc.vrsctest.buildwithdreams.com"
         content: |
-          {{ idcreate_domain }} {
-            reverse_proxy {{ idcreate_bind_ip }}:{{ idcreate_api_port }}
+          {{ rpc_domain }} {
+            reverse_proxy {{ rpc_bind_ip }}:{{ rpc_port }}
             tls hermesreport@verus.trading
             log {
               output file /data/access.log
@@ -76,17 +77,9 @@
 
     - name: Display Caddyfile update result
       ansible.builtin.debug:
-        msg: "Caddyfile updated — idcreate.vrsc route block {{ 'added' if caddyfile_updated.changed else 'already present' }}"
+        msg: "Caddyfile updated — rpc.vrsctest route block {{ 'added' if caddyfile_updated.changed else 'already present' }}"
 
-    # ── 5. Format Caddyfile (skipped — /config/caddy is read-only inside container)
-    # NOTE: blockinfile produces valid YAML, no formatting required. The Caddyfile
-    # is mounted from the host at /home/dream-hermes-agent/caddy/Caddyfile so
-    # edits via blockinfile on the host are immediately visible to Caddy.
-    # Skip caddy fmt since /config is read-only inside this container.
-    # If you need to format, run: caddy fmt --overwrite /home/dream-hermes-agent/caddy/Caddyfile
-    #   on the BWD host directly.
-
-    # ── 6. Validate Caddyfile syntax before reload ──────────────────────────────
+    # ── 5. Validate Caddyfile syntax before reload ──────────────────────────────
     - name: Validate Caddyfile syntax
       ansible.builtin.shell:
         cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
@@ -99,7 +92,7 @@
         msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
       when: caddy_validate.rc != 0
 
-    # ── 7. Reload Caddy ────────────────────────────────────────────────────────
+    # ── 6. Reload Caddy ────────────────────────────────────────────────────────
     - name: Reload Caddy to apply new route
       ansible.builtin.shell:
         cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
@@ -112,9 +105,9 @@
         msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
 
     # ── 7. Health check: verify upstream is reachable from Caddy ────────────────
-    - name: Health check — upstream idcreate API
+    - name: Health check — upstream VRSCTEST RPC server
       ansible.builtin.shell:
-        cmd: "docker exec {{ caddy_container }} wget -q -O - --timeout=5 http://{{ idcreate_bind_ip }}:{{ idcreate_api_port }}/ 2>&1 | head -1 || echo 'unreachable'"
+        cmd: "docker exec {{ caddy_container }} wget -q -O - --timeout=5 http://{{ rpc_bind_ip }}:{{ rpc_port }}/ 2>&1 | head -1 || echo 'unreachable'"
       register: upstream_health
       changed_when: false
       failed_when: false
@@ -122,18 +115,19 @@
 
     - name: Warn if upstream unreachable
       ansible.builtin.debug:
-        msg: "WARNING: Upstream at {{ idcreate_bind_ip }}:{{ idcreate_api_port }} did not respond. Route is configured but app may be down."
+        msg: "WARNING: Upstream at {{ rpc_bind_ip }}:{{ rpc_port }} did not respond. Route is configured but RPC server may be down."
       when: caddyfile_updated.changed and upstream_health.stdout == 'unreachable'
 
     # ── 8. Summary ──────────────────────────────────────────────────────────────
     - name: Display deployment summary
       ansible.builtin.debug:
         msg: |
-          svc-idcreate (VRSC) Caddy route added:
-            URL      → https://{{ idcreate_domain }}
-            Upstream → {{ idcreate_bind_ip }}:{{ idcreate_api_port }}
+          VRSCTEST RPC Caddy route added:
+            URL      → https://{{ rpc_domain }}
+            Upstream → {{ rpc_bind_ip }}:{{ rpc_port }}
             TLS      → hermesreport@verus.trading (manual)
             Route    → reverse_proxy (no path rewrite)
+            Network  → net-vrsctest
 
           Verify:
-            curl -I https://{{ idcreate_domain }}
+            curl -I https://{{ rpc_domain }}
