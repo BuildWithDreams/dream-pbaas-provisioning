@@ -1,0 +1,171 @@
+# Playbook: 42c-clever-vrsctest-caddy-route.yml
+# Purpose: Add clever.vrsctest and cleverapi.vrsctest routes to Caddy on net-vrsctest.
+#          Uses remove-then-add pattern so IP changes are always applied cleanly.
+#          Caddy is already on net-vrsctest (no join needed).
+# Requires: -e @group_vars/production-local.yml
+#          Clever app containers running on 10.200.0.102:7070 and 10.200.0.101:7000
+# Idempotent: safe to re-run — always removes old blocks then adds fresh ones.
+# Run with: ansible-playbook -i inventory.ini playbooks/42c-clever-vrsctest-caddy-route.yml
+#             -e @group_vars/production-local.yml
+---
+- name: Add clever.vrsctest and cleverapi.vrsctest Caddy routes
+  hosts: production
+  become: false
+  vars:
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    docker_network: "net-vrsctest"
+    clever_domain: "clever.vrsctest.buildwithdreams.com"
+    clever_bind_ip: "10.200.0.102"
+    clever_port: "7070"
+    cleverapi_domain: "cleverapi.vrsctest.buildwithdreams.com"
+    cleverapi_bind_ip: "10.200.0.101"
+    cleverapi_port: "7000"
+
+  tasks:
+    # ── 0. Pre-flight: verify Caddy is on net-vrsctest ──────────────────────────
+    - name: Verify Caddy is connected to net-vrsctest (pre-flight)
+      ansible.builtin.shell:
+        cmd: "docker network inspect {{ docker_network }} --format '{% raw %}{{range .Containers}}{{.Name}} {{end}}{% endraw %}' 2>/dev/null | grep -qw '{{ caddy_container }}' && echo 'ok' || echo 'missing'"
+      register: caddy_network_preflight
+      changed_when: false
+      failed_when: caddy_network_preflight.stdout != 'ok'
+
+    # ── 1. Validate Caddyfile exists ────────────────────────────────────────────
+    - name: Verify Caddyfile exists
+      ansible.builtin.stat:
+        path: "{{ caddy_path }}/Caddyfile"
+      register: caddyfile_stat
+      failed_when: not caddyfile_stat.stat.exists
+
+    # ── 2. Remove existing route blocks (both clever and cleverapi) ──────────────
+    - name: Remove any existing clever.vrsctest route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK — clever.vrsctest.buildwithdreams.com"
+        state: absent
+      register: clever_route_removed
+      failed_when: false
+
+    - name: Remove any existing cleverapi.vrsctest route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK — cleverapi.vrsctest.buildwithdreams.com"
+        state: absent
+      register: cleverapi_route_removed
+      failed_when: false
+
+    - name: Display removal result
+      ansible.builtin.debug:
+        msg: "Existing route blocks — clever: {{ 'removed' if clever_route_removed.changed else 'not found' }}, cleverapi: {{ 'removed' if cleverapi_route_removed.changed else 'not found' }}"
+
+    # ── 3. Add clever route block ───────────────────────────────────────────────
+    - name: Append clever.vrsctest route to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK — clever.vrsctest.buildwithdreams.com"
+        content: |
+          {{ clever_domain }} {
+            reverse_proxy {{ clever_bind_ip }}:{{ clever_port }}
+            tls hermesreport@verus.trading
+            log {
+              output file /data/access.log
+            }
+          }
+      register: clever_caddyfile_updated
+
+    - name: Display clever route result
+      ansible.builtin.debug:
+        msg: "Caddyfile updated — clever.vrsctest route block {{ 'added' if clever_caddyfile_updated.changed else 'already present' }}"
+
+    # ── 4. Add cleverapi route block ────────────────────────────────────────────
+    - name: Append cleverapi.vrsctest route to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK — cleverapi.vrsctest.buildwithdreams.com"
+        content: |
+          {{ cleverapi_domain }} {
+            reverse_proxy {{ cleverapi_bind_ip }}:{{ cleverapi_port }}
+            tls hermesreport@verus.trading
+            log {
+              output file /data/access.log
+            }
+          }
+      register: cleverapi_caddyfile_updated
+
+    - name: Display cleverapi route result
+      ansible.builtin.debug:
+        msg: "Caddyfile updated — cleverapi.vrsctest route block {{ 'added' if cleverapi_caddyfile_updated.changed else 'already present' }}"
+
+    # ── 5. Copy updated Caddyfile into container ────────────────────────────────
+    - name: Copy updated Caddyfile into container
+      ansible.builtin.shell:
+        cmd: "docker cp {{ caddy_path }}/Caddyfile {{ caddy_container }}:/config/caddy/Caddyfile"
+      register: caddy_copy
+      changed_when: true
+
+    # ── 6. Validate Caddyfile syntax before reload ────────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      failed_when: false
+      changed_when: false
+
+    - name: Abort if Caddyfile invalid
+      ansible.builtin.fail:
+        msg: "Caddyfile is invalid — not reloading. Output: {{ caddy_validate.stdout_lines | join(' ') }}"
+      when: caddy_validate.rc != 0
+
+    # ── 7. Reload Caddy ────────────────────────────────────────────────────────
+    - name: Reload Caddy to apply new routes
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      failed_when: false
+      changed_when: clever_caddyfile_updated.changed or cleverapi_caddyfile_updated.changed
+
+    - name: Display reload result
+      ansible.builtin.debug:
+        msg: "Caddy reloaded: {{ caddy_reload.stdout_lines | join(' ') if caddy_reload.stdout else caddy_reload.stderr_lines | join(' ') }}"
+
+    # ── 8. Health checks ───────────────────────────────────────────────────────
+    - name: Health check — clever upstream
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} wget -q -O - --timeout=5 http://{{ clever_bind_ip }}:{{ clever_port }}/ 2>&1 | head -1 || echo 'unreachable'"
+      register: clever_upstream_health
+      changed_when: false
+      failed_when: false
+
+    - name: Health check — cleverapi upstream
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} wget -q -O - --timeout=5 http://{{ cleverapi_bind_ip }}:{{ cleverapi_port }}/ 2>&1 | head -1 || echo 'unreachable'"
+      register: cleverapi_upstream_health
+      changed_when: false
+      failed_when: false
+
+    - name: Warn if clever upstream unreachable
+      ansible.builtin.debug:
+        msg: "WARNING: Clever upstream at {{ clever_bind_ip }}:{{ clever_port }} did not respond. Route is configured but app may be down."
+      when: clever_upstream_health.stdout == 'unreachable'
+
+    - name: Warn if cleverapi upstream unreachable
+      ansible.builtin.debug:
+        msg: "WARNING: Cleverapi upstream at {{ cleverapi_bind_ip }}:{{ cleverapi_port }} did not respond. Route is configured but app may be down."
+      when: cleverapi_upstream_health.stdout == 'unreachable'
+
+    # ── 9. Summary ──────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          Clever VRSCTEST Caddy routes added:
+            clever.vrsctest.buildwithdreams.com
+              → upstream: {{ clever_bind_ip }}:{{ clever_port }}
+            cleverapi.vrsctest.buildwithdreams.com
+              → upstream: {{ cleverapi_bind_ip }}:{{ cleverapi_port }}
+            TLS: hermesreport@verus.trading (LE)
+            Network: net-vrsctest
+
+          Verify:
+            curl -I https://clever.vrsctest.buildwithdreams.com
+            curl -I https://cleverapi.vrsctest.buildwithdreams.com
