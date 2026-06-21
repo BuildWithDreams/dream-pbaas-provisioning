@@ -10,3 +10,4 @@ __pycache__/
 repos/docker-verusd
 repos/operations
 repos/verus-identity-update-qr-creator-main
+.venv
