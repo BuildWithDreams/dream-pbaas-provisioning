@@ -97,14 +97,7 @@
       ansible.builtin.debug:
         msg: "Caddyfile updated — cleverapi.vrsctest route block {{ 'added' if cleverapi_caddyfile_updated.changed else 'already present' }}"
 
-    # ── 5. Copy updated Caddyfile into container ────────────────────────────────
-    - name: Copy updated Caddyfile into container
-      ansible.builtin.shell:
-        cmd: "docker cp {{ caddy_path }}/Caddyfile {{ caddy_container }}:/config/caddy/Caddyfile"
-      register: caddy_copy
-      changed_when: true
-
-    # ── 6. Validate Caddyfile syntax before reload ────────────────────────────────
+    # ── 5. Validate Caddyfile syntax before reload ────────────────────────────────
     - name: Validate Caddyfile syntax
       ansible.builtin.shell:
         cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
