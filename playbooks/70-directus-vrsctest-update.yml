@@ -1,0 +1,60 @@
+# Playbook: 70-directus-vrsctest-update.yml
+# Purpose: Update Directus to latest image — pull new image, recreate container.
+# Run with: ansible-playbook -i inventory.ini playbooks/70-directus-vrsctest-update.yml
+# Idempotent: safe to re-run — only pulls and restarts if new image available.
+---
+- name: Update Directus stack
+  hosts: production
+  become: false
+  vars:
+    directus_path: "/home/{{ ansible_user }}/directus"
+    directus_compose_project: "directus"
+
+  tasks:
+    # ── 1. Pre-flight ──────────────────────────────────────────────────────
+    - name: Check Directus deploy directory exists
+      ansible.builtin.stat:
+        path: "{{ directus_path }}"
+      register: dir_check
+
+    - name: Fail if directory missing
+      ansible.builtin.fail:
+        msg: "Directus directory missing at {{ directus_path }}"
+      when: not dir_check.stat.exists
+
+    # ── 2. Pull latest images ──────────────────────────────────────────────
+    - name: Pull latest Directus and Postgres images
+      ansible.builtin.shell:
+        cmd: "cd {{ directus_path }} && docker compose pull 2>&1"
+      register: pull_result
+      changed_when: "'Downloaded' in pull_result.stdout or 'Pulled' in pull_result.stdout"
+
+    # ── 3. Recreate containers ─────────────────────────────────────────────
+    - name: Recreate containers with latest images
+      ansible.builtin.shell:
+        cmd: "cd {{ directus_path }} && docker compose up -d --force-recreate 2>&1"
+      register: recreate_result
+      changed_when: "'Recreated' in recreate_result.stdout or 'Created' in recreate_result.stdout"
+
+    # ── 4. Health check ────────────────────────────────────────────────────
+    - name: Wait for Directus to become healthy
+      ansible.builtin.shell:
+        cmd: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' directus_app 2>/dev/null)
+            if [ "$STATUS" = "healthy" ]; then
+              echo "healthy"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "timeout"
+          exit 1
+        executable: /bin/bash
+      register: health_result
+      changed_when: false
+      failed_when: health_result.rc != 0
+
+    - name: Display update result
+      ansible.builtin.debug:
+        msg: "Directus updated and healthy"

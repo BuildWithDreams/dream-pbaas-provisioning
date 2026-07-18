@@ -1,0 +1,91 @@
+# Playbook: 69-directus-vrsctest-caddy-route.yml
+# Purpose: Add Caddy HTTPS route for Directus on VRSCTEST.
+#          Uses remove-then-add pattern for idempotency.
+# Run with: ansible-playbook -i inventory.ini playbooks/69-directus-vrsctest-caddy-route.yml
+# Idempotent: safe to re-run — removes existing block first, always adds fresh.
+# Next: none — Directus stack is operational.
+---
+- name: Add Caddy route for Directus
+  hosts: production
+  become: false
+  vars:
+    directus_domain: "directus.vrsctest.buildwithdreams.com"
+    directus_upstream_ip: "10.200.0.9"
+    directus_port: 8055
+    directus_caddy_container: "mains_blue_caddy-caddy-1"
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_letsencrypt_email: "hermesreport@verus.trading"
+
+  tasks:
+    # ── 1. Pre-flight: find Directus container IP on net-vrsctest ──────────
+    - name: Get Directus container IP on net-vrsctest
+      ansible.builtin.shell:
+        cmd: >
+          docker inspect directus_app --format '{% raw %}{{json .NetworkSettings.Networks}}{% endraw %}' 2>&1
+      register: directus_ip_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set Directus upstream IP from container inspection
+      ansible.builtin.set_fact:
+        upstream_ip: "{{ (directus_ip_result.stdout | from_json).get(directus_network, {}).get('IPAddress', '') | default(directus_upstream_ip) }}"
+      vars:
+        directus_network: "net-vrsctest"
+
+    - name: Display upstream IP
+      ansible.builtin.debug:
+        msg: "Directus upstream: {{ upstream_ip }}:{{ directus_port }}"
+
+    # ── 2. Remove existing block (idempotency — always clean first) ────────
+    - name: Remove existing Directus route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK — {{ directus_domain }}"
+        state: absent
+
+    # ── 3. Append fresh route block ────────────────────────────────────────
+    - name: Append Directus route block to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK — {{ directus_domain }}"
+        content: |
+          {{ directus_domain }} {
+            reverse_proxy {{ upstream_ip }}:{{ directus_port }}
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+      register: caddyfile_updated
+
+    # ── 4. Validate Caddyfile ──────────────────────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ directus_caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      changed_when: false
+      failed_when: caddy_validate.rc != 0
+
+    # ── 5. Reload Caddy (always — safe when content unchanged) ─────────────
+    - name: Reload Caddy to apply new route
+      ansible.builtin.shell:
+        cmd: "docker exec {{ directus_caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      changed_when: "'success' in caddy_reload.stdout"
+      failed_when: caddy_reload.rc != 0
+
+    # ── 6. Summary ─────────────────────────────────────────────────────────
+    - name: Display deploy summary
+      ansible.builtin.debug:
+        msg: |
+          Directus route added:
+
+            https://{{ directus_domain }}
+              → {{ upstream_ip }}:{{ directus_port }}
+
+          TLS cert provisioning is async — may take ~30s.
+          Verify with:
+
+            curl -sI https://{{ directus_domain }}
+
+          First access: create an admin user at /admin/init-setup
