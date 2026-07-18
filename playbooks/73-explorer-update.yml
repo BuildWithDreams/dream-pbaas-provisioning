@@ -1,0 +1,42 @@
+# Playbook: 73-explorer-update.yml
+# Purpose: Pull latest source, rebuild image, restart container.
+# Run with: ansible-playbook -i inventory.ini playbooks/73-explorer-update.yml
+# Idempotent: only rebuilds and restarts when source changed.
+---
+- name: Update explorer stack
+  hosts: production
+  become: false
+  vars:
+    explorer_path: "/home/{{ ansible_user }}/dreamtree-walker"
+    explorer_image: "buildwithdreams/explorer:local"
+
+  tasks:
+    - name: Check source directory
+      ansible.builtin.stat:
+        path: "{{ explorer_path }}"
+      register: dir_check
+    - name: Fail if missing
+      ansible.builtin.fail:
+        msg: "Explorer source not found at {{ explorer_path }}"
+      when: not dir_check.stat.exists
+
+    - name: Rebuild Docker image
+      ansible.builtin.shell:
+        cmd: "cd {{ explorer_path }} && docker build -t {{ explorer_image }} . 2>&1"
+      register: build_result
+      changed_when: "'Successfully built' in build_result.stdout"
+      failed_when: build_result.rc != 0
+
+    - name: Restart container
+      ansible.builtin.shell:
+        cmd: "cd {{ explorer_path }} && docker compose up -d --force-recreate 2>&1"
+      register: restart_result
+      changed_when: "'Recreated' in restart_result.stdout or 'Created' in restart_result.stdout"
+      failed_when: restart_result.rc != 0
+
+    - name: Verify container
+      ansible.builtin.shell:
+        cmd: "docker ps --format '{% raw %}{{.Names}}\t{{.Status}}{% endraw %}' 2>&1 | grep explorer_app"
+      register: ps_result
+      changed_when: false
+      failed_when: "'explorer_app' not in ps_result.stdout or 'Up' not in ps_result.stdout"

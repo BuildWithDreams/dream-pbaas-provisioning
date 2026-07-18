@@ -1,0 +1,73 @@
+# Playbook: 74-explorer-caddy-route.yml
+# Purpose: Add/update Caddy HTTPS route for the identity explorer.
+#          Uses remove-then-add pattern for full idempotency.
+# Run with: ansible-playbook -i inventory.ini playbooks/74-explorer-caddy-route.yml
+# Idempotent: always removes existing block, adds fresh.
+---
+- name: Add Caddy route for identity explorer
+  hosts: production
+  become: false
+  vars:
+    explorer_domain: "explorer.vrsctest.buildwithdreams.com"
+    explorer_upstream_ip: "10.200.0.9"
+    explorer_port: 8080
+    explorer_caddy_container: "mains_blue_caddy-caddy-1"
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_letsencrypt_email: "hermesreport@verus.trading"
+
+  tasks:
+    - name: Get explorer container IP on net-vrsctest
+      ansible.builtin.shell:
+        cmd: "docker inspect explorer_app --format '{% raw %}{{json .NetworkSettings.Networks}}{% endraw %}' 2>&1"
+      register: explorer_ip_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set upstream IP from container inspection
+      ansible.builtin.set_fact:
+        upstream_ip: "{{ (explorer_ip_result.stdout | from_json).get('net-vrsctest', {}).get('IPAddress', '') | default(explorer_upstream_ip) }}"
+
+    - name: Display upstream
+      ansible.builtin.debug:
+        msg: "Explorer upstream: {{ upstream_ip }}:{{ explorer_port }}"
+
+    - name: Remove existing route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK -- {{ explorer_domain }}"
+        state: absent
+
+    - name: Append route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK -- {{ explorer_domain }}"
+        content: |
+          {{ explorer_domain }} {
+            reverse_proxy {{ upstream_ip }}:{{ explorer_port }}
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+      register: caddyfile_updated
+
+    - name: Validate Caddyfile
+      ansible.builtin.shell:
+        cmd: "docker exec {{ explorer_caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      changed_when: false
+      failed_when: caddy_validate.rc != 0
+
+    - name: Reload Caddy
+      ansible.builtin.shell:
+        cmd: "docker exec {{ explorer_caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      changed_when: "'success' in caddy_reload.stdout"
+      failed_when: caddy_reload.rc != 0
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg: |
+          Explorer route updated:
+            https://{{ explorer_domain }}
+              -> {{ upstream_ip }}:{{ explorer_port }}

@@ -1,0 +1,40 @@
+# Playbook: 71-explorer-build.yml
+# Purpose: Build Docker image for the identity explorer from local source.
+# Run with: ansible-playbook -i inventory.ini playbooks/71-explorer-build.yml
+# Idempotent: safe to re-run — only rebuilds when source changed.
+# Next: run 72-explorer-deploy.yml
+---
+- name: Build explorer Docker image
+  hosts: production
+  become: false
+  vars:
+    explorer_path: "/home/{{ ansible_user }}/dreamtree-walker"
+    explorer_image: "buildwithdreams/explorer:local"
+
+  tasks:
+    - name: Check explorer source directory exists
+      ansible.builtin.stat:
+        path: "{{ explorer_path }}"
+      register: dir_check
+
+    - name: Fail if source missing
+      ansible.builtin.fail:
+        msg: "Explorer source not found at {{ explorer_path }}. Clone dreamtree-walker repo first."
+      when: not dir_check.stat.exists
+
+    - name: Build Docker image
+      ansible.builtin.shell:
+        cmd: "cd {{ explorer_path }} && docker build -t {{ explorer_image }} . 2>&1"
+      register: build_result
+      changed_when: "'Successfully built' in build_result.stdout or 'naming to' in build_result.stdout"
+      failed_when: build_result.rc != 0
+
+    - name: Verify image exists
+      ansible.builtin.shell:
+        cmd: "docker images buildwithdreams/explorer:local --format 'table {% raw %}{{.Repository}}:{{.Tag}}{% endraw %}' 2>&1"
+      register: verify_result
+      changed_when: false
+
+    - name: Display result
+      ansible.builtin.debug:
+        msg: "{{ verify_result.stdout }}"
