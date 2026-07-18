@@ -1,0 +1,41 @@
+# Playbook: 72-explorer-deploy.yml
+# Purpose: Deploy explorer container on net-vrsctest via docker compose.
+# Run with: ansible-playbook -i inventory.ini playbooks/72-explorer-deploy.yml
+# Idempotent: safe to re-run — compose up -d is idempotent.
+# Next: run 74-explorer-caddy-route.yml (73 is pre-flight check, skip if Caddy already on net-vrsctest)
+---
+- name: Deploy explorer container
+  hosts: production
+  become: false
+  vars:
+    explorer_path: "/home/{{ ansible_user }}/dreamtree-walker"
+    explorer_compose_project: "explorer"
+
+  tasks:
+    - name: Check deploy directory exists
+      ansible.builtin.stat:
+        path: "{{ explorer_path }}"
+      register: dir_check
+
+    - name: Fail if missing
+      ansible.builtin.fail:
+        msg: "Explorer directory missing at {{ explorer_path }}"
+      when: not dir_check.stat.exists
+
+    - name: Deploy with docker compose
+      ansible.builtin.shell:
+        cmd: "cd {{ explorer_path }} && docker compose up -d 2>&1"
+      register: deploy_result
+      changed_when: "'Created' in deploy_result.stdout or 'Recreated' in deploy_result.stdout"
+      failed_when: deploy_result.rc != 0
+
+    - name: Verify container is running
+      ansible.builtin.shell:
+        cmd: "docker ps --format '{% raw %}{{.Names}}\t{{.Status}}{% endraw %}' 2>&1 | grep explorer_app"
+      register: ps_result
+      changed_when: false
+      failed_when: "'explorer_app' not in ps_result.stdout or 'Up' not in ps_result.stdout"
+
+    - name: Display status
+      ansible.builtin.debug:
+        msg: "Explorer running: {{ ps_result.stdout }}"
