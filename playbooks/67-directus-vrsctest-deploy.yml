@@ -1,0 +1,84 @@
+# Playbook: 67-directus-vrsctest-deploy.yml
+# Purpose: Deploy Directus on net-vrsctest via docker compose.
+#          Expects 66-directus-vrsctest-setup.yml to have run first.
+# Run with: ansible-playbook -i inventory.ini playbooks/67-directus-vrsctest-deploy.yml
+# Idempotent: safe to re-run — compose up -d is idempotent.
+# Next: run 68-directus-vrsctest-caddy-network.yml
+---
+- name: Deploy Directus on net-vrsctest
+  hosts: production
+  become: false
+  vars:
+    directus_path: "/home/{{ ansible_user }}/directus"
+    directus_compose_project: "directus"
+    directus_network: "net-vrsctest"
+
+  tasks:
+    # ── 1. Pre-flight: check directory exists ──────────────────────────────
+    - name: Check Directus deploy directory exists
+      ansible.builtin.stat:
+        path: "{{ directus_path }}"
+      register: dir_check
+
+    - name: Fail if directory missing — run 66 first
+      ansible.builtin.fail:
+        msg: "Directus directory missing at {{ directus_path }} — run 66-directus-vrsctest-setup.yml first"
+      when: not dir_check.stat.exists or not dir_check.stat.isdir
+
+    # ── 2. Pull images ─────────────────────────────────────────────────────
+    - name: Pull Directus and Postgres images
+      ansible.builtin.shell:
+        cmd: "cd {{ directus_path }} && docker compose pull 2>&1"
+      register: pull_result
+      changed_when: "'Downloaded' in pull_result.stdout or 'Pulled' in pull_result.stdout"
+      failed_when: pull_result.rc != 0
+
+    # ── 3. Deploy containers ───────────────────────────────────────────────
+    - name: Start Directus stack with docker compose
+      ansible.builtin.shell:
+        cmd: "cd {{ directus_path }} && docker compose up -d 2>&1"
+      register: deploy_result
+      changed_when: "'Created' in deploy_result.stdout or 'Started' in deploy_result.stdout"
+      failed_when: deploy_result.rc != 0
+
+    # ── 4. Check container health ──────────────────────────────────────────
+    - name: Wait for containers to become healthy
+      ansible.builtin.shell:
+        cmd: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' directus_app 2>/dev/null)
+            if [ "$STATUS" = "healthy" ]; then
+              echo "healthy"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "timeout"
+          exit 1
+        executable: /bin/bash
+      register: health_result
+      changed_when: false
+      failed_when: health_result.rc != 0
+
+    # ── 5. Verify containers are running ───────────────────────────────────
+    - name: Check running containers
+      ansible.builtin.shell:
+        cmd: "docker ps --format '{{.Names}}\t{{.Status}}' | grep directus"
+      register: ps_result
+      changed_when: false
+
+    - name: Display running containers
+      ansible.builtin.debug:
+        msg: "{{ ps_result.stdout_lines | default(['No containers found']) }}"
+
+    # ── 6. Summary ─────────────────────────────────────────────────────────
+    - name: Display deploy summary
+      ansible.builtin.debug:
+        msg: |
+          Directus deployed on net-vrsctest
+          Container: directus_app (internal port {{ directus_port | default('8055') }})
+          Access: http://localhost:8055 (local) or via Caddy after playbook 68-69
+
+          Next steps:
+            ansible-playbook -i inventory.ini playbooks/68-directus-vrsctest-caddy-network.yml
+            ansible-playbook -i inventory.ini playbooks/69-directus-vrsctest-caddy-route.yml

@@ -1,0 +1,54 @@
+# Playbook: 68-directus-vrsctest-caddy-network.yml
+# Purpose: Attach Caddy container to net-vrsctest so it can proxy to Directus.
+# Run with: ansible-playbook -i inventory.ini playbooks/68-directus-vrsctest-caddy-network.yml
+# Idempotent: safe to re-run — skips if network already attached.
+# Next: run 69-directus-vrsctest-caddy-route.yml
+---
+- name: Attach Caddy to Directus network
+  hosts: production
+  become: false
+  vars:
+    directus_network: "net-vrsctest"
+    directus_caddy_container: "mains_blue_caddy-caddy-1"
+
+  tasks:
+    # ── 1. Check if Caddy is already on the target network ─────────────────
+    - name: Check Caddy container networks
+      ansible.builtin.shell:
+        cmd: "docker inspect {{ directus_caddy_container }} --format '{{json .NetworkSettings.Networks}}' 2>&1"
+      register: caddy_networks
+      changed_when: false
+
+    - name: Check if target network is already attached
+      ansible.builtin.set_fact:
+        network_attached: "{{ directus_network in caddy_networks.stdout }}"
+
+    - name: Display network status
+      ansible.builtin.debug:
+        msg: "Caddy already on {{ directus_network }} — skipping"
+      when: network_attached
+
+    # ── 2. Attach Caddy to target network ──────────────────────────────────
+    - name: Attach Caddy to {{ directus_network }}
+      ansible.builtin.shell:
+        cmd: "docker network connect {{ directus_network }} {{ directus_caddy_container }} 2>&1"
+      register: attach_result
+      changed_when: "'Successfully' in attach_result.stdout"
+      failed_when: attach_result.rc != 0
+      when: not network_attached
+
+    - name: Display attach result
+      ansible.builtin.debug:
+        msg: "Attached Caddy to {{ directus_network }}"
+      when: not network_attached
+
+    # ── 3. Verify ──────────────────────────────────────────────────────────
+    - name: Verify Caddy is on target network
+      ansible.builtin.shell:
+        cmd: "docker inspect {{ directus_caddy_container }} --format '{{json .NetworkSettings.Networks}}' 2>&1 | python3 -c \"import sys,json; nets=json.loads(sys.stdin.read()); [print(k, v['IPAddress']) for k,v in nets.items() if 'vrsctest' in k or 'vrsc' in k]\""
+      register: verify_result
+      changed_when: false
+
+    - name: Display Caddy network IPs
+      ansible.builtin.debug:
+        msg: "{{ verify_result.stdout_lines | default(['No matching networks']) }}"
