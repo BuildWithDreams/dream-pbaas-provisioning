@@ -1,0 +1,58 @@
+# Playbook: 76-bwd-site-build.yml
+# Purpose: Build the bwd-site Docusaurus static site in a node:alpine container.
+#          Output (build/) lands on the host at ~/bwd-site/build/
+# Run with: ansible-playbook -i inventory.ini playbooks/76-bwd-site-build.yml
+# Requires: 75-bwd-site-clone.yml (repo must be cloned)
+---
+- name: Build bwd-site Docusaurus static site
+  hosts: production
+  become: false
+  vars:
+    bwd_site_path: "/home/{{ ansible_user }}/bwd-site"
+
+  tasks:
+    - name: Verify bwd-site directory exists
+      ansible.builtin.stat:
+        path: "{{ bwd_site_path }}"
+      register: bwd_site_dir_stat
+      failed_when: not bwd_site_dir_stat.stat.exists
+
+    - name: Verify package.json exists
+      ansible.builtin.stat:
+        path: "{{ bwd_site_path }}/package.json"
+      register: package_json_stat
+      failed_when: not package_json_stat.stat.exists
+
+    - name: Display build start
+      ansible.builtin.debug:
+        msg: "Building bwd-site Docusaurus from {{ bwd_site_path }} — node:alpine container"
+
+    - name: Run npm install && npm run build inside node:alpine
+      ansible.builtin.shell:
+        cmd: >
+          docker run --rm
+          -v {{ bwd_site_path }}:/srv/app
+          -w /srv/app
+          node:alpine
+          sh -c "npm install --silent 2>&1 && npm run build 2>&1"
+      register: build_result
+      changed_when: true
+      failed_when: false
+
+    - name: Display build output
+      ansible.builtin.debug:
+        msg: "{{ build_result.stdout_lines[-20:] | default(build_result.stdout_lines) }}"
+
+    - name: Verify build directory was created
+      ansible.builtin.stat:
+        path: "{{ bwd_site_path }}/build"
+      register: dist_stat
+
+    - name: Fail if build not created
+      ansible.builtin.fail:
+        msg: "Build failed — {{ bwd_site_path }}/build was not created. Full output above."
+      when: not dist_stat.stat.exists
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg: "Build complete — build/ created at {{ bwd_site_path }}/build"

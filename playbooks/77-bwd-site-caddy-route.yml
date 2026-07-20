@@ -1,0 +1,116 @@
+# Playbook: 77-bwd-site-caddy-route.yml
+# Purpose: Add Caddy volume mount for bwd-site Docusaurus build/ and
+#          add/update HTTPS route for bwd.dev.buildwithdreams.com (file_server).
+#          Uses remove-then-add pattern for full idempotency.
+# Run with: ansible-playbook -i inventory.ini playbooks/77-bwd-site-caddy-route.yml
+# Requires: 75-bwd-site-clone.yml + 76-bwd-site-build.yml (build/ must exist)
+# Idempotent: safe to re-run — always removes and re-adds the route block.
+---
+- name: Add bwd-site Caddy volume mount and route
+  hosts: production
+  become: false
+  vars:
+    bwd_site_path: "/home/{{ ansible_user }}/bwd-site"
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_compose_file: "/home/{{ ansible_user }}/caddy/docker-compose.yml"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    caddy_container_root: "/srv/bwd-site"
+    bwd_dev_domain: "bwd.dev.buildwithdreams.com"
+    caddy_letsencrypt_email: "hermesreport@verus.trading"
+
+  tasks:
+    # ── 1. Pre-flight: verify build/ exists ─────────────────────────────────────
+    - name: Verify bwd-site build directory exists
+      ansible.builtin.stat:
+        path: "{{ bwd_site_path }}/build"
+      register: build_stat
+      failed_when: not build_stat.stat.exists
+
+    # ── 2. Add volume mount to Caddy compose file ───────────────────────────────
+    - name: Check if bwd-site volume mount already in Caddy compose
+      ansible.builtin.shell:
+        cmd: "grep -q 'bwd-site/build:{{ caddy_container_root }}' {{ caddy_compose_file }} && echo 'present' || echo 'absent'"
+      register: vol_check
+      changed_when: false
+      failed_when: false
+
+    - name: Add bwd-site volume mount to Caddy compose
+      ansible.builtin.lineinfile:
+        path: "{{ caddy_compose_file }}"
+        insertafter: "- /home/{{ ansible_user }}/rvt/build:/srv/rvt/dist:ro"
+        line: "      - /home/{{ ansible_user }}/bwd-site/build:{{ caddy_container_root }}:ro"
+        state: present
+      register: vol_updated
+      when: vol_check.stdout == 'absent'
+
+    - name: Recreate Caddy container to pick up new volume mount
+      ansible.builtin.shell:
+        cmd: "cd {{ caddy_path }} && docker compose up -d --no-deps caddy 2>&1"
+      register: caddy_up_result
+      when: vol_updated.changed
+      failed_when: false
+
+    - name: Wait for Caddy to be healthy after recreate
+      ansible.builtin.pause:
+        seconds: 5
+      when: vol_updated.changed
+
+    - name: Display volume mount result
+      ansible.builtin.debug:
+        msg: "Volume mount {{ 'added' if vol_updated.changed else 'already present' }}"
+
+    # ── 3. Remove existing route block (ensure clean state) ─────────────────────
+    - name: Remove existing bwd-dev route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK -- {{ bwd_dev_domain }}"
+        state: absent
+
+    # ── 4. Append fresh route block ─────────────────────────────────────────────
+    - name: Append bwd-dev route to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK -- {{ bwd_dev_domain }}"
+        content: |
+          {{ bwd_dev_domain }} {
+            root * {{ caddy_container_root }}
+            file_server
+            try_files {path} /index.html
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+      register: caddyfile_updated
+
+    # ── 5. Validate Caddyfile ───────────────────────────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      changed_when: false
+      failed_when: caddy_validate.rc != 0
+
+    # ── 6. Reload Caddy ─────────────────────────────────────────────────────────
+    - name: Reload Caddy to apply new route
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      changed_when: "'success' in caddy_reload.stdout"
+      failed_when: caddy_reload.rc != 0
+
+    # ── 7. Summary ──────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          bwd-site deployed to dev:
+            URL      → https://{{ bwd_dev_domain }}
+            Source   → {{ caddy_container_root }} (container path)
+            Route    → file_server + try_files {path} /index.html
+            TLS      → Automatic via Let's Encrypt
+
+          Verify:
+            curl -I https://{{ bwd_dev_domain }}
+
+          Note: DNS for {{ bwd_dev_domain }} must point to the BWD server IP
+          (135.181.136.105) before the route will be reachable externally.

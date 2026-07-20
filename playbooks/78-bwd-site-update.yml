@@ -1,0 +1,94 @@
+# Playbook: 78-bwd-site-update.yml
+# Purpose: Complete update of the bwd-site Docusaurus deployment.
+#          Chains: pull latest (via local mirror) → rebuild → reload Caddy.
+# Run with: ansible-playbook -i inventory.ini playbooks/78-bwd-site-update.yml
+# Requires: 75-bwd-site-clone.yml, 76-bwd-site-build.yml, 77-bwd-site-caddy-route.yml
+#           to have been run at least once (for directory structure and volume mount).
+# Idempotent: safe to re-run.
+---
+- name: Update bwd-site Docusaurus deployment
+  hosts: production
+  become: false
+  vars:
+    local_mirror_path: "/tmp/bwd-site-mirror"
+    local_repo_url: "https://gitlab.syncproof.net/sf/bwd-site.git"
+    bwd_site_path: "/home/{{ ansible_user }}/bwd-site"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+
+  tasks:
+    # ── 1. Pull latest source via local mirror → rsync to BWD ────────────────
+    - name: Check if local mirror exists
+      ansible.builtin.stat:
+        path: "{{ local_mirror_path }}"
+      register: local_mirror_stat
+      delegate_to: localhost
+
+    - name: Pull latest from GitLab into local mirror
+      ansible.builtin.git:
+        repo: "{{ local_repo_url }}"
+        dest: "{{ local_mirror_path }}"
+        clone: "{{ not local_mirror_stat.stat.exists }}"
+        update: true
+        force: true
+        accept_hostkey: true
+      delegate_to: localhost
+
+    - name: Sync local mirror to target host
+      ansible.builtin.synchronize:
+        src: "{{ local_mirror_path }}/"
+        dest: "{{ bwd_site_path }}"
+        delete: true
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=node_modules"
+
+    # ── 2. Rebuild Docusaurus static site ─────────────────────────────────────
+    - name: Verify package.json exists
+      ansible.builtin.stat:
+        path: "{{ bwd_site_path }}/package.json"
+      register: package_json_stat
+      failed_when: not package_json_stat.stat.exists
+
+    - name: Run npm install && npm run build inside node:alpine
+      ansible.builtin.shell:
+        cmd: >
+          docker run --rm
+          -v {{ bwd_site_path }}:/srv/app
+          -w /srv/app
+          node:alpine
+          sh -c "npm install --silent 2>&1 && npm run build 2>&1"
+      register: build_result
+      changed_when: true
+      failed_when: false
+
+    - name: Verify build directory was created
+      ansible.builtin.stat:
+        path: "{{ bwd_site_path }}/build"
+      register: dist_stat
+      failed_when: not dist_stat.stat.exists
+
+    # ── 3. Reload Caddy to pick up new static files ──────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      changed_when: false
+      failed_when: caddy_validate.rc != 0
+
+    - name: Reload Caddy
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      changed_when: "'success' in caddy_reload.stdout"
+      failed_when: caddy_reload.rc != 0
+
+    - name: Display update summary
+      ansible.builtin.debug:
+        msg: |
+          bwd-site update complete:
+            1. Source pulled from GitLab (via local mirror)
+            2. Docusaurus rebuilt
+            3. Caddy reloaded
+
+          Site: https://bwd.dev.buildwithdreams.com
