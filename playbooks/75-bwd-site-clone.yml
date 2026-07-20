@@ -1,0 +1,53 @@
+# Playbook: 75-bwd-site-clone.yml
+# Purpose: Clone sf/bwd-site (Docusaurus) to ~/bwd-site on the target host.
+#          Clones locally first (this host has GitLab credentials), then rsyncs to BWD.
+#          BWD cannot authenticate to GitLab directly (no deploy token configured yet).
+# Run with: ansible-playbook -i inventory.ini playbooks/75-bwd-site-clone.yml
+# Idempotent: safe to re-run — pulls latest on local, rsyncs changes only.
+---
+- name: Clone bwd-site repository (local mirror → rsync to BWD)
+  hosts: production
+  become: false
+  vars:
+    local_mirror_path: "/tmp/bwd-site-mirror"
+    local_repo_url: "https://gitlab.syncproof.net/sf/bwd-site.git"
+    bwd_site_path: "/home/{{ ansible_user }}/bwd-site"
+
+  tasks:
+    # ── 1. Clone/pull on localhost (has GitLab credentials via glab) ──────────
+    - name: Check if local mirror exists
+      ansible.builtin.stat:
+        path: "{{ local_mirror_path }}"
+      register: local_mirror_stat
+      delegate_to: localhost
+
+    - name: Clone or update local mirror
+      ansible.builtin.git:
+        repo: "{{ local_repo_url }}"
+        dest: "{{ local_mirror_path }}"
+        clone: "{{ not local_mirror_stat.stat.exists }}"
+        update: true
+        force: true
+        accept_hostkey: true
+      register: clone_result
+      delegate_to: localhost
+
+    # ── 2. Rsync local mirror to BWD ─────────────────────────────────────────
+    - name: Create target directory on BWD
+      ansible.builtin.file:
+        path: "{{ bwd_site_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Sync local mirror to target host
+      ansible.builtin.synchronize:
+        src: "{{ local_mirror_path }}/"
+        dest: "{{ bwd_site_path }}"
+        delete: true
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=node_modules"
+
+    - name: Display clone status
+      ansible.builtin.debug:
+        msg: "{{ 'Local mirror updated from GitLab' if clone_result.changed else 'Local mirror up-to-date' }} — synced to BWD"
