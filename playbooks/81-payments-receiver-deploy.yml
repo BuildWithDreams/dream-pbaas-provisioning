@@ -90,11 +90,14 @@
       failed_when: up_result.rc != 0
 
     # ── 6. Wait for health ───────────────────────────────────────────────────
-    - name: Wait for app health endpoint (up to 120s)
+    # NOTE: do NOT probe 127.0.0.1:8000 from the host — another BWD container
+    # (vtmarketsapi) publishes host port 8000 and squats it. The payments app
+    # is only reachable via its static IP on the Docker network.
+    - name: Wait for app health endpoint on static IP (up to 120s)
       ansible.builtin.shell:
         cmd: >-
           for i in $(seq 1 24); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/health 2>/dev/null || echo 000);
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://{{ kdf_static_ip }}:8000/health 2>/dev/null || echo 000);
             if [ "$code" = "200" ]; then echo "healthy after $((i*5))s"; exit 0; fi;
             sleep 5;
           done; echo "app not healthy after 120s"; exit 1
@@ -104,7 +107,7 @@
 
     - name: Verify KDF health via app /status
       ansible.builtin.shell:
-        cmd: "curl -s --max-time 10 http://127.0.0.1:8000/status 2>&1"
+        cmd: "curl -s --max-time 10 http://{{ kdf_static_ip }}:8000/status 2>&1"
       register: status_result
       changed_when: false
 
