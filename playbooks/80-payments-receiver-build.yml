@@ -1,0 +1,40 @@
+# Playbook: 80-payments-receiver-build.yml
+# Purpose: Build the payments-receiver Docker images on BWD (both targets):
+#          - buildwithdreams/payments-receiver:kdf      (KDF daemon)
+#          - buildwithdreams/payments-receiver:latest   (FastAPI app)
+# Run with: ansible-playbook -i inventory.ini playbooks/80-payments-receiver-build.yml
+# Requires: 79-payments-receiver-clone.yml (source must be on BWD)
+# Idempotent: rebuilds unconditionally; changed_when tracks image creation.
+---
+- name: Build payments-receiver Docker images
+  hosts: production
+  become: false
+  vars:
+    receiver_path: "/home/{{ ansible_user }}/payments-receiver"
+    kdf_image: "buildwithdreams/payments-receiver:kdf"
+    app_image: "buildwithdreams/payments-receiver:latest"
+
+  tasks:
+    - name: Verify source directory exists
+      ansible.builtin.stat:
+        path: "{{ receiver_path }}/Dockerfile"
+      register: dockerfile_stat
+      failed_when: not dockerfile_stat.stat.exists
+
+    - name: Build KDF target image
+      ansible.builtin.shell:
+        cmd: "cd {{ receiver_path }} && docker build --target kdf -t {{ kdf_image }} . 2>&1"
+      register: kdf_build
+      changed_when: "'Successfully built' in kdf_build.stdout or 'naming to' in kdf_build.stdout"
+      failed_when: kdf_build.rc != 0
+
+    - name: Build app target image
+      ansible.builtin.shell:
+        cmd: "cd {{ receiver_path }} && docker build --target app -t {{ app_image }} . 2>&1"
+      register: app_build
+      changed_when: "'Successfully built' in app_build.stdout or 'naming to' in app_build.stdout"
+      failed_when: app_build.rc != 0
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg: "Built {{ kdf_image }} and {{ app_image }} on BWD"

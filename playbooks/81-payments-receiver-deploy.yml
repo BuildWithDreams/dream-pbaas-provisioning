@@ -1,0 +1,113 @@
+# Playbook: 81-payments-receiver-deploy.yml
+# Purpose: Deploy the payments-receiver KDF + FastAPI stack on BWD.
+#          - Recreates both containers from docker-compose.deploy.yml (HD wallet mode)
+#          - Backs up the existing kdf_data volume before any cleanup
+#          - Removes the stale Iguana-mode KDF wallet DB (DB/) — required for
+#            the HD wallet switch, otherwise KDF fails with "HMAC error: MAC tag mismatch"
+#          - Writes .env with KDF_STATIC_IP / KDF_WALLET_PASSWORD from group_vars
+# Run with: ansible-playbook -i inventory.ini playbooks/81-payments-receiver-deploy.yml -e @group_vars/production-local.yml
+# Requires: 79 + 80 (source synced and images built)
+---
+- name: Deploy payments-receiver stack on BWD
+  hosts: production
+  become: false
+  vars:
+    receiver_path: "/home/{{ ansible_user }}/payments-receiver"
+    compose_file: "docker-compose.deploy.yml"
+    volume_name: "payments-receiver_kdf_data"
+    backup_dir: "/home/{{ ansible_user }}/payments-receiver-backups"
+    kdf_static_ip: "{{ payments_receiver_kdf_static_ip }}"
+    kdf_wallet_name: "{{ payments_receiver_kdf_wallet_name }}"
+    kdf_wallet_password: "{{ payments_receiver_kdf_wallet_password }}"
+
+  tasks:
+    - name: Verify compose file exists
+      ansible.builtin.stat:
+        path: "{{ receiver_path }}/{{ compose_file }}"
+      register: compose_stat
+      failed_when: not compose_stat.stat.exists
+
+    # ── 1. Backup existing volume data ────────────────────────────────────────
+    - name: Create backup directory
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Backup existing kdf_data volume
+      ansible.builtin.shell:
+        cmd: >-
+          docker run --rm -v {{ volume_name }}:/data
+          -v {{ backup_dir }}:/backup
+          alpine tar czf /backup/kdf-data-$(date +%Y%m%d-%H%M%S).tar.gz -C /data . 2>&1
+      register: backup_result
+      changed_when: true
+      failed_when: backup_result.rc != 0
+      ignore_errors: true
+
+    - name: Note if backup failed
+      ansible.builtin.debug:
+        msg: "Volume backup failed ({{ backup_result.msg | default('rc=' ~ backup_result.rc) }}) — continuing; volume may be empty"
+      when: backup_result.failed
+
+    # ── 2. Tear down old stack (keeps named volume) ──────────────────────────
+    - name: Tear down existing stack
+      ansible.builtin.shell:
+        cmd: "cd {{ receiver_path }} && docker compose -f {{ compose_file }} down --remove-orphans 2>&1"
+      register: down_result
+      changed_when: "'Removed' in down_result.stdout or 'Stopped' in down_result.stdout or 'No stopped containers' in down_result.stdout"
+      failed_when: down_result.rc != 0
+      ignore_errors: true
+
+    # ── 3. Clean stale Iguana wallet DB + old app DB (fresh HD start) ────────
+    - name: Remove stale KDF wallet DB and old payments.db from volume
+      ansible.builtin.shell:
+        cmd: >-
+          docker run --rm -v {{ volume_name }}:/data
+          alpine sh -c "rm -rf /data/DB /data/payments.db /data/payments.db-shm /data/payments.db-wal /data/MM2.json 2>&1; ls -la /data"
+      register: clean_result
+      changed_when: true
+      failed_when: clean_result.rc != 0
+
+    # ── 4. Write .env for the deploy compose ─────────────────────────────────
+    - name: Write .env with deployment variables
+      ansible.builtin.copy:
+        dest: "{{ receiver_path }}/.env"
+        mode: '0600'
+        content: |
+          KDF_STATIC_IP={{ kdf_static_ip }}
+          KDF_WALLET_NAME={{ kdf_wallet_name }}
+          KDF_WALLET_PASSWORD={{ kdf_wallet_password }}
+          KDF_RPC_PASSWORD=KdfRpc_2024
+          KDF_NETID=0
+
+    # ── 5. Start the stack ───────────────────────────────────────────────────
+    - name: Start payments-receiver stack
+      ansible.builtin.shell:
+        cmd: "cd {{ receiver_path }} && docker compose --env-file .env -f {{ compose_file }} up -d 2>&1"
+      register: up_result
+      changed_when: "'Started' in up_result.stdout or 'Created' in up_result.stdout or 'Running' in up_result.stdout"
+      failed_when: up_result.rc != 0
+
+    # ── 6. Wait for health ───────────────────────────────────────────────────
+    - name: Wait for app health endpoint (up to 120s)
+      ansible.builtin.shell:
+        cmd: >-
+          for i in $(seq 1 24); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/health 2>/dev/null || echo 000);
+            if [ "$code" = "200" ]; then echo "healthy after $((i*5))s"; exit 0; fi;
+            sleep 5;
+          done; echo "app not healthy after 120s"; exit 1
+      register: health_result
+      changed_when: false
+      failed_when: health_result.rc != 0
+
+    - name: Verify KDF health via app /status
+      ansible.builtin.shell:
+        cmd: "curl -s --max-time 10 http://127.0.0.1:8000/status 2>&1"
+      register: status_result
+      changed_when: false
+
+    - name: Display /status summary
+      ansible.builtin.debug:
+        msg: "{{ status_result.stdout | default('(empty response)') }}"
