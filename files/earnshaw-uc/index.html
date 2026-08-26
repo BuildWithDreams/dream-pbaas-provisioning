@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>James Earnshaw — Coming Soon</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #e2e8f0;
+      text-align: center;
+      padding: 2rem;
+    }
+    .card {
+      max-width: 560px;
+      padding: 3rem 2.5rem;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    }
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.5rem;
+      color: #ffffff;
+    }
+    .badge {
+      display: inline-block;
+      margin-top: 1.25rem;
+      padding: 0.4rem 1rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #a5b4fc;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.35);
+    }
+    p.lead {
+      margin-top: 1rem;
+      font-size: 1.05rem;
+      color: #94a3b8;
+      line-height: 1.6;
+    }
+    .spinner {
+      width: 36px;
+      height: 36px;
+      margin: 1.75rem auto 0;
+      border: 3px solid rgba(148, 163, 184, 0.2);
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    footer {
+      margin-top: 1.5rem;
+      font-size: 0.85rem;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>James Earnshaw</h1>
+    <div class="badge">Under Construction</div>
+    <p class="lead">This site is being built. Please check back soon.</p>
+    <div class="spinner"></div>
+    <footer>&copy; <span id="year"></span> James Earnshaw</footer>
+  </div>
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>

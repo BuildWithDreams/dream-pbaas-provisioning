@@ -1,0 +1,122 @@
+# Playbook: 84-earnshaw-caddy-route.yml
+# Purpose: Deploy james.earnshaw.com under-construction static page on BWD.
+#          Creates the static dir, adds the Caddy volume mount, and
+#          adds/updates the HTTPS route (file_server). Uses remove-then-add
+#          pattern for full idempotency.
+# Run with: ansible-playbook -i inventory.ini playbooks/84-earnshaw-caddy-route.yml
+# Idempotent: safe to re-run — always removes and re-adds the route block.
+---
+- name: Add earnshaw under-construction page + Caddy route
+  hosts: production
+  become: false
+  vars:
+    earnshaw_path: "/home/{{ ansible_user }}/earnshaw-site"
+    earnshaw_build: "/home/{{ ansible_user }}/earnshaw-site/build"
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_compose_file: "/home/{{ ansible_user }}/caddy/docker-compose.yml"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    caddy_container_root: "/srv/earnshaw-site"
+    earnshaw_domain: "james.earnshaw.com"
+    caddy_letsencrypt_email: "hermesreport@verus.trading"
+
+  tasks:
+    # ── 1. Pre-flight: create static build dir + index.html ───────────────────
+    - name: Create earnshaw static build directory
+      ansible.builtin.file:
+        path: "{{ earnshaw_build }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy under-construction index.html
+      ansible.builtin.copy:
+        src: "../files/earnshaw-uc/index.html"
+        dest: "{{ earnshaw_build }}/index.html"
+        mode: "0644"
+
+    # ── 2. Add volume mount to Caddy compose file ─────────────────────────────
+    - name: Check if earnshaw volume mount already in Caddy compose
+      ansible.builtin.shell:
+        cmd: "grep -q 'earnshaw-site/build:{{ caddy_container_root }}' {{ caddy_compose_file }} && echo 'present' || echo 'absent'"
+      register: vol_check
+      changed_when: false
+      failed_when: false
+
+    - name: Add earnshaw volume mount to Caddy compose
+      ansible.builtin.lineinfile:
+        path: "{{ caddy_compose_file }}"
+        insertafter: "- /home/{{ ansible_user }}/bwd-site/build:/srv/bwd-site:ro"
+        line: "      - /home/{{ ansible_user }}/earnshaw-site/build:{{ caddy_container_root }}:ro"
+        state: present
+      register: vol_updated
+      when: vol_check.stdout == 'absent'
+
+    - name: Recreate Caddy container to pick up new volume mount
+      ansible.builtin.shell:
+        cmd: "cd {{ caddy_path }} && docker compose up -d --no-deps caddy 2>&1"
+      register: caddy_up_result
+      when: vol_updated.changed
+      failed_when: false
+
+    - name: Wait for Caddy to be healthy after recreate
+      ansible.builtin.pause:
+        seconds: 5
+      when: vol_updated.changed
+
+    - name: Display volume mount result
+      ansible.builtin.debug:
+        msg: "Volume mount {{ 'added' if vol_updated.changed else 'already present' }}"
+
+    # ── 3. Remove existing route block (ensure clean state) ───────────────────
+    - name: Remove existing earnshaw route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK -- {{ earnshaw_domain }}"
+        state: absent
+
+    # ── 4. Append fresh route block ───────────────────────────────────────────
+    - name: Append earnshaw route to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK -- {{ earnshaw_domain }}"
+        content: |
+          {{ earnshaw_domain }} {
+            root * {{ caddy_container_root }}
+            file_server
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+      register: caddyfile_updated
+
+    # ── 5. Validate Caddyfile ─────────────────────────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      changed_when: false
+      failed_when: caddy_validate.rc != 0
+
+    # ── 6. Reload Caddy ───────────────────────────────────────────────────────
+    - name: Reload Caddy to apply new route
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      changed_when: "'success' in caddy_reload.stdout"
+      failed_when: caddy_reload.rc != 0
+
+    # ── 7. Summary ────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          james.earnshaw.com under-construction page deployed:
+            URL      → https://{{ earnshaw_domain }}
+            Source   → {{ caddy_container_root }} (container path)
+            Route    → file_server
+            TLS      → Automatic via Let's Encrypt
+
+          Verify:
+            curl -I https://{{ earnshaw_domain }}
+
+          Note: DNS for {{ earnshaw_domain }} already points to the BWD server
+          IP (135.181.136.105) — cert issuance should complete on first request.
