@@ -1,0 +1,50 @@
+# Playbook: 85-oly1-site-sync.yml
+# Purpose: Sync the oly1-site static mirror (repo: BuildWithDreams/oly1-site,
+#          cloned at ~/oly1-site on this host) to the BWD deploy directory.
+#          The mirror is pre-rendered static HTML — no build step needed.
+# Run with: ansible-playbook -i inventory.ini playbooks/85-oly1-site-sync.yml
+# Idempotent: safe to re-run — rsync with --delete mirrors the local tree.
+---
+- name: Sync oly1-site static files to BWD
+  hosts: production
+  become: false
+  vars:
+    local_site_path: "{{ lookup('env', 'HOME') }}/oly1-site/site"
+    oly1_site_path: "/home/{{ ansible_user }}/oly1-site"
+
+  tasks:
+    # ── 1. Pre-flight: local mirror must exist ─────────────────────────────────
+    - name: Verify local oly1-site mirror exists
+      ansible.builtin.stat:
+        path: "{{ local_site_path }}/index.html"
+      register: local_index_stat
+      delegate_to: localhost
+      failed_when: not local_index_stat.stat.exists
+
+    # ── 2. Create target directory on BWD ──────────────────────────────────────
+    - name: Create oly1-site directory on BWD
+      ansible.builtin.file:
+        path: "{{ oly1_site_path }}/site"
+        state: directory
+        mode: '0755'
+
+    # ── 3. Sync static files ────────────────────────────────────────────────────
+    - name: Sync oly1-site static files to BWD
+      ansible.builtin.synchronize:
+        src: "{{ local_site_path }}/"
+        dest: "{{ oly1_site_path }}/site/"
+        delete: true
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=.DS_Store"
+
+    # ── 4. Verify index.html landed ─────────────────────────────────────────────
+    - name: Verify index.html on BWD
+      ansible.builtin.stat:
+        path: "{{ oly1_site_path }}/site/index.html"
+      register: remote_index_stat
+      failed_when: not remote_index_stat.stat.exists
+
+    - name: Display sync summary
+      ansible.builtin.debug:
+        msg: "oly1-site synced — {{ oly1_site_path }}/site (index.html present: {{ remote_index_stat.stat.exists }})"

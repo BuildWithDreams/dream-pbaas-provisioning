@@ -1,0 +1,119 @@
+# Playbook: 86-oly1-site-caddy-route.yml
+# Purpose: Add the Caddy volume mount for oly1-site static files and
+#          add/update the HTTPS route for oly1.vrsctest.buildwithdreams.com
+#          (file_server). Uses remove-then-add pattern for full idempotency.
+# Run with: ansible-playbook -i inventory.ini playbooks/86-oly1-site-caddy-route.yml
+# Requires: 85-oly1-site-sync.yml (site/ must exist on the target host)
+# Idempotent: safe to re-run — always removes and re-adds the route block.
+---
+- name: Add oly1-site Caddy volume mount and route
+  hosts: production
+  become: false
+  vars:
+    oly1_site_path: "/home/{{ ansible_user }}/oly1-site/site"
+    caddy_path: "/home/{{ ansible_user }}/caddy"
+    caddy_compose_file: "/home/{{ ansible_user }}/caddy/docker-compose.yml"
+    caddy_container: "mains_blue_caddy-caddy-1"
+    caddy_container_root: "/srv/oly1-site"
+    oly1_domain: "oly1.vrsctest.buildwithdreams.com"
+    caddy_letsencrypt_email: "hermesreport@verus.trading"
+
+  tasks:
+    # ── 1. Pre-flight: verify static site exists ────────────────────────────────
+    - name: Verify oly1-site index.html exists
+      ansible.builtin.stat:
+        path: "{{ oly1_site_path }}/index.html"
+      register: index_stat
+      failed_when: not index_stat.stat.exists
+
+    # ── 2. Add volume mount to Caddy compose file ───────────────────────────────
+    - name: Check if oly1-site volume mount already in Caddy compose
+      ansible.builtin.shell:
+        cmd: "grep -q 'oly1-site/site:{{ caddy_container_root }}' {{ caddy_compose_file }} && echo 'present' || echo 'absent'"
+      register: vol_check
+      changed_when: false
+      failed_when: false
+
+    - name: Add oly1-site volume mount to Caddy compose
+      ansible.builtin.lineinfile:
+        path: "{{ caddy_compose_file }}"
+        insertafter: "- /home/{{ ansible_user }}/earnshaw-site/build:/srv/earnshaw-site:ro"
+        line: "      - /home/{{ ansible_user }}/oly1-site/site:{{ caddy_container_root }}:ro"
+        state: present
+      register: vol_updated
+      when: vol_check.stdout == 'absent'
+
+    - name: Recreate Caddy container to pick up new volume mount
+      ansible.builtin.shell:
+        cmd: "cd {{ caddy_path }} && docker compose up -d --no-deps caddy 2>&1"
+      register: caddy_up_result
+      when: vol_updated.changed
+      failed_when: false
+
+    - name: Wait for Caddy after recreate
+      ansible.builtin.pause:
+        seconds: 5
+      when: vol_updated.changed
+
+    - name: Display volume mount result
+      ansible.builtin.debug:
+        msg: "Volume mount {{ 'added' if vol_updated.changed else 'already present' }}"
+
+    # ── 3. Remove existing route block (ensure clean state) ─────────────────────
+    - name: Remove existing oly1 route block
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# BEGIN ANSIBLE MANAGED BLOCK -- {{ oly1_domain }}"
+        state: absent
+
+    # ── 4. Append fresh route block ─────────────────────────────────────────────
+    - name: Append oly1 route to Caddyfile
+      ansible.builtin.blockinfile:
+        path: "{{ caddy_path }}/Caddyfile"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK -- {{ oly1_domain }}"
+        content: |
+          {{ oly1_domain }} {
+            handle /_next/image {
+              respond 404
+            }
+            handle {
+              root * {{ caddy_container_root }}
+              try_files {path} {path}.html /index.html
+              file_server
+            }
+            tls {{ caddy_letsencrypt_email }}
+            log {
+              output file /data/access.log
+            }
+          }
+      register: caddyfile_updated
+
+    # ── 5. Validate Caddyfile ───────────────────────────────────────────────────
+    - name: Validate Caddyfile syntax
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy validate --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_validate
+      changed_when: false
+      failed_when: caddy_validate.rc != 0
+
+    # ── 6. Reload Caddy ─────────────────────────────────────────────────────────
+    - name: Reload Caddy to apply new route
+      ansible.builtin.shell:
+        cmd: "docker exec {{ caddy_container }} caddy reload --config /config/caddy/Caddyfile 2>&1"
+      register: caddy_reload
+      changed_when: "'success' in caddy_reload.stdout"
+      failed_when: caddy_reload.rc != 0
+
+    # ── 7. Summary ──────────────────────────────────────────────────────────────
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          oly1-site deployed:
+            URL      → https://{{ oly1_domain }}
+            Source   → {{ caddy_container_root }} (container path)
+            Route    → file_server + try_files {path} {path}.html /index.html
+            Guard    → /_next/image responds 404 (vestigial optimizer preloads)
+            TLS      → Automatic via Let's Encrypt
+
+          Verify:
+            curl -I https://{{ oly1_domain }}
