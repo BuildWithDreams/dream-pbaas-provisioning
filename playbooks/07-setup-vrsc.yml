@@ -69,7 +69,7 @@
     # 4. Check debug.log for clean shutdown (condition 2 of 2 — daemon is offline here, use log)
     - name: Check debug.log for clean shutdown
       ansible.builtin.shell:
-        cmd: "tail -1 /root/.komodo/VRSC/debug.log 2>/dev/null || echo '{{ '{{' }}NO_LOG{{ '}}' }}"
+        cmd: "tail -1 {{ data_dir }}/debug.log 2>/dev/null || echo NO_LOG"
       register: debug_log_tail
       changed_when: false
       failed_when: false
