@@ -1,0 +1,101 @@
+# Playbook: 09b-hygiene-vrsctest.yml
+# Purpose: Post-bootstrap hygiene check for VRSCTEST — verify chain sync state, flip BOOTSTRAP_FLAG off
+# Run after: daemon has been running (e.g. started with -bootstrap) and is fully synced
+#
+# Uses RPC getinfo (-chain=VRSCTEST) to check:
+#   - blocks == longestchain → fully synced, no fork → safe to disable bootstrap
+#   - blocks != longestchain → fork detected → leave bootstrap on, report fork
+#   - Daemon unreachable / RPC error → cannot confirm health → leave bootstrap on
+#
+# This is NOT part of the normal startup flow — it is a manual/scheduled hygiene step
+# to transition the node from bootstrap mode to normal peer-sync after a successful run.
+# (The bootstrap flag makes verusd wipe and re-download the bootstrap file on every start,
+#  so it MUST be cleared once the node is healthy.)
+#
+# Idempotent: safe to run repeatedly. Once BOOTSTRAP_FLAG= is set, runs report no changes.
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/09b-hygiene-vrsctest.yml
+
+---
+- name: VRSCTEST hygiene check
+  hosts: production
+  become: false
+  vars:
+    vrsctest_path: "/home/{{ ansible_user }}/docker-verusd/vrsctest"
+    container_candidates:
+      - "dev200-vrsctest-1"
+
+  tasks:
+    # 1. Detect the running VRSCTEST container
+    - name: Find running vrsctest container
+      ansible.builtin.shell:
+        cmd: "docker ps 2>/dev/null | grep -E 'vrsctest-1' | head -1 | awk '{print $NF}' || true"
+      register: container_find
+      changed_when: false
+
+    - name: Fail if no running vrsctest container
+      ansible.builtin.fail:
+        msg: "No running VRSCTEST container found — hygiene check needs a live daemon to verify sync."
+      when: container_find.stdout | trim | length == 0
+
+    - name: Set container name
+      ansible.builtin.set_fact:
+        container_name: "{{ container_find.stdout | trim }}"
+
+    # 2. Check RPC getinfo for chain sync and fork status
+    - name: Get chain sync status via RPC
+      ansible.builtin.shell:
+        cmd: "docker exec {{ container_name }} verus -chain=VRSCTEST getinfo 2>/dev/null || echo '{}'"
+      register: getinfo_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Parse getinfo
+      ansible.builtin.set_fact:
+        getinfo_parsed: "{{ getinfo_raw.stdout | from_json if getinfo_raw.stdout | length > 0 else {} }}"
+
+    - name: Extract sync and fork data
+      ansible.builtin.set_fact:
+        blocks: "{{ getinfo_parsed.blocks | default(-1) }}"
+        longestchain: "{{ getinfo_parsed.longestchain | default(-2) }}"
+        fork_detected: "{{ getinfo_parsed.blocks | default(-1) != getinfo_parsed.longestchain | default(-2) }}"
+        rpc_available: "{{ getinfo_parsed.blocks is defined and getinfo_parsed.longestchain is defined }}"
+
+    - name: Display chain status
+      ansible.builtin.debug:
+        msg: |
+          Container: {{ container_name }}
+          RPC available: {{ rpc_available }}
+          blocks: {{ blocks }}
+          longestchain: {{ longestchain }}
+          fork_detected: {{ fork_detected }}
+          synced (blocks == longestchain): {{ not fork_detected }}
+
+    # 3. Flip BOOTSTRAP_FLAG off if chain is synced and no fork detected
+    - name: Confirm hygiene — disable bootstrap
+      when: rpc_available and not fork_detected
+      block:
+        - name: Disable bootstrap flag
+          ansible.builtin.lineinfile:
+            path: "{{ vrsctest_path }}/.env"
+            regexp: '^VERUSD_BOOTSTRAP_FLAG='
+            line: "VERUSD_BOOTSTRAP_FLAG="
+            state: present
+          register: bootstrap_cleared
+
+        - name: Display success
+          ansible.builtin.debug:
+            msg: |
+              HYGIENE CHECK PASSED (VRSCTEST)
+              Chain fully synced (blocks == longestchain), no fork detected.
+              BOOTSTRAP_FLAG {{ 'cleared' if bootstrap_cleared.changed else 'already empty' }} — next restart syncs from peers.
+
+    # 4. Report fork or RPC failure — leave bootstrap on
+    - name: Report fork or RPC failure
+      when: not (rpc_available and not fork_detected)
+      ansible.builtin.debug:
+        msg: |
+          HYGIENE CHECK FAILED
+          {{ 'Fork detected (blocks != longestchain)' if rpc_available and fork_detected else 'RPC unavailable — daemon may still be loading or not running' }}.
+          BOOTSTRAP_FLAG left unchanged (-bootstrap).
+          Resolve the issue before running the hygiene check again.
