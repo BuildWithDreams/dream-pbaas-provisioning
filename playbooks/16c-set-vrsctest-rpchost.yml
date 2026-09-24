@@ -1,0 +1,78 @@
+# Playbook: 16c-set-vrsctest-rpchost.yml
+# Purpose: Ensure vrsctest.conf binds RPC on all interfaces (rpchost=0.0.0.0) so
+#          dependent containers on net-vrsctest (sids/verus-qr-service, rpc_server)
+#          can reach it at the container's network IP.
+#
+# Background: verusd >=1.2.18 strictly honours rpchost; a leftover rpchost=127.0.0.1
+#             from older setups makes RPC loopback-only and sids gets ECONNREFUSED.
+#             Safety: rpcallowip=10.200.0.0/24 still gates which clients are accepted,
+#             and RPC port is not published on the host.
+#
+# ⚠️  Run AFTER shutting down vRSCTEST (10b-shutdown-vrsctest.yml) — the daemon
+#     reads the conf at startup. Restart with 08b-start-vrsctest.yml.
+#
+# Idempotent: re-running reports no change once rpchost=0.0.0.0 is set.
+#
+# Run with: ansible-playbook -i inventory.ini playbooks/16c-set-vrsctest-rpchost.yml
+
+---
+- name: Set vRSCTEST rpchost to 0.0.0.0
+  hosts: production
+  become: false
+  vars:
+    vrsctest_path: "/home/{{ ansible_user }}/docker-verusd/vrsctest"
+    conf_file: "{{ vrsctest_path }}/data_dir/vrsctest.conf"
+
+  tasks:
+    - name: Check vrsctest.conf exists
+      ansible.builtin.shell:
+        cmd: "test -f {{ conf_file }} && echo present || echo missing"
+      register: conf_check
+      changed_when: false
+
+    - name: Fail if vrsctest.conf missing
+      ansible.builtin.fail:
+        msg: "vrsctest.conf not found: {{ conf_file }} — start vRSCTEST once so the config is generated."
+      when: conf_check.stdout != "present"
+
+    - name: Refuse while vrsctest container is running
+      ansible.builtin.shell:
+        cmd: "docker ps 2>/dev/null | grep -c 'vrsctest-1' || true"
+      register: running_check
+      changed_when: false
+
+    - name: Fail if daemon is running
+      ansible.builtin.fail:
+        msg: "vRSCTEST container is still running — run 10b-shutdown-vrsctest.yml first so the conf edit takes effect on next start."
+      when: running_check.stdout | int > 0
+
+    - name: Show current rpchost line
+      ansible.builtin.shell:
+        cmd: "grep '^rpchost=' {{ conf_file }} || echo '(none)'"
+      register: rpchost_before
+      changed_when: false
+
+    - name: Display before state
+      ansible.builtin.debug:
+        msg: "Before: {{ rpchost_before.stdout }}"
+
+    - name: Set rpchost=0.0.0.0
+      ansible.builtin.lineinfile:
+        path: "{{ conf_file }}"
+        regexp: '^rpchost='
+        line: "rpchost=0.0.0.0"
+        state: present
+      register: rpchost_updated
+
+    - name: Confirm rpcallowip entries present
+      ansible.builtin.shell:
+        cmd: "grep '^rpcallowip=' {{ conf_file }} | tr '\\n' ' '"
+      register: allowips
+      changed_when: false
+
+    - name: Display final state
+      ansible.builtin.debug:
+        msg: |
+          {{ '✅ rpchost updated' if rpchost_updated.changed else 'ℹ️ rpchost already 0.0.0.0 — no change' }}
+          rpcallowip entries: {{ allowips.stdout }}
+          Next: run 08b-start-vrsctest.yml, then verify RPC reachability from a net-vrsctest container.
