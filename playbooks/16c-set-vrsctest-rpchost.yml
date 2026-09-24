@@ -1,12 +1,17 @@
 # Playbook: 16c-set-vrsctest-rpchost.yml
-# Purpose: Ensure vrsctest.conf binds RPC on all interfaces (rpchost=0.0.0.0) so
-#          dependent containers on net-vrsctest (sids/verus-qr-service, rpc_server)
-#          can reach it at the container's network IP.
+# Purpose: Ensure vrsctest.conf binds RPC on all interfaces so dependent containers
+#          on net-vrsctest (sids/verus-qr-service, rpc_server) can reach it at the
+#          container's network IP.
 #
-# Background: verusd >=1.2.18 strictly honours rpchost; a leftover rpchost=127.0.0.1
-#             from older setups makes RPC loopback-only and sids gets ECONNREFUSED.
+# Background: verusd >=1.2.18 switched to the Bitcoin-core style -rpcbind option.
+#             The legacy rpchost= line is ignored by 1.2.18, whose default bind is
+#             loopback — sids then gets ECONNREFUSED. Old daemons (<=1.2.17) ignored
+#             rpchost and defaulted to binding all interfaces. So the conf must carry
+#             BOTH rpchost=0.0.0.0 (old images) and rpcbind=0.0.0.0 (new images).
 #             Safety: rpcallowip=10.200.0.0/24 still gates which clients are accepted,
 #             and RPC port is not published on the host.
+#             Log check: "option -rpcallowip was specified without -rpcbind" means
+#             rpcbind is missing.
 #
 # ⚠️  Run AFTER shutting down vRSCTEST (10b-shutdown-vrsctest.yml) — the daemon
 #     reads the conf at startup. Restart with 08b-start-vrsctest.yml.
@@ -56,13 +61,21 @@
       ansible.builtin.debug:
         msg: "Before: {{ rpchost_before.stdout }}"
 
-    - name: Set rpchost=0.0.0.0
+    - name: Set rpchost=0.0.0.0 (legacy line, honoured by <=1.2.17 images)
       ansible.builtin.lineinfile:
         path: "{{ conf_file }}"
         regexp: '^rpchost='
         line: "rpchost=0.0.0.0"
         state: present
       register: rpchost_updated
+
+    - name: Set rpcbind=0.0.0.0 (honoured by >=1.2.18 daemons)
+      ansible.builtin.lineinfile:
+        path: "{{ conf_file }}"
+        regexp: '^rpcbind='
+        line: "rpcbind=0.0.0.0"
+        state: present
+      register: rpcbind_updated
 
     - name: Confirm rpcallowip entries present
       ansible.builtin.shell:
@@ -73,6 +86,7 @@
     - name: Display final state
       ansible.builtin.debug:
         msg: |
-          {{ '✅ rpchost updated' if rpchost_updated.changed else 'ℹ️ rpchost already 0.0.0.0 — no change' }}
+          rpchost updated: {{ rpchost_updated.changed }} / rpcbind updated: {{ rpcbind_updated.changed }}
+          (both false = already configured)
           rpcallowip entries: {{ allowips.stdout }}
           Next: run 08b-start-vrsctest.yml, then verify RPC reachability from a net-vrsctest container.

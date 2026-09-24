@@ -61,6 +61,24 @@
       register: compose_up
       changed_when: true
 
+    # 3b. Self-heal: 10b disconnects the container from the network at shutdown;
+    # compose 'up' on an existing stopped container starts it WITHOUT reattaching,
+    # leaving it with no network (verusd up, RPC unreachable, EHOSTUNREACH for peers).
+    - name: Check container is attached to the network
+      ansible.builtin.shell:
+        cmd: "docker inspect dev200-vrsctest-1 --format '{{'{{'}} json .NetworkSettings.Networks {{'}}'}}' | grep -c '{{ docker_network_name }}' || true"
+      register: attach_check
+      changed_when: false
+
+    - name: Reattach container to network with static IP if detached
+      ansible.builtin.shell:
+        cmd: |
+          set -a; source "{{ vrsctest_path }}/.env"; set +a
+          docker network connect --ip "$VERUSD_IPV4" "{{ docker_network_name }}" dev200-vrsctest-1
+      when: attach_check.stdout | int == 0
+      register: reattach
+      changed_when: reattach.rc == 0
+
     - name: Display compose output
       ansible.builtin.debug:
         msg: "{{ compose_up.stdout_lines }}"
